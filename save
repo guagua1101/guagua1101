@@ -1,0 +1,1343 @@
+
+import matplotlib.pyplot as plt
+import pandas as pd 
+import numpy as np
+from pandas import DataFrame
+import datetime
+import scipy.stats
+from scipy import stats 
+#adf test
+from statsmodels.tsa.arima_model import ARIMA
+from statsmodels.graphics.tsaplots import plot_pacf
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf
+from statsmodels.stats.diagnostic import acorr_ljungbox
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+import statsmodels.stats.diagnostic
+import statsmodels.api as sm 
+from arch import arch_model
+from numpy import cumsum, log, polyfit, sqrt, std, subtract
+from numpy.random import randn
+from numpy.linalg import LinAlgError
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.stattools import acf, q_stat, adfuller
+from scipy.stats import probplot, moment
+from arch.univariate import ConstantMean, GARCH, Normal
+import armagarch as ag
+import pmdarima as pm
+import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
+#keras 
+from keras.callbacks import EarlyStopping
+from keras.callbacks import ModelCheckpoint
+import tensorflow as tf 
+    
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation
+from keras.layers.recurrent import LSTM
+import keras
+from sklearn.preprocessing import MinMaxScaler
+import statsmodels.api as sm
+import math 
+from sklearn.metrics import mean_absolute_error,mean_squared_error
+def univariate_data(dataset, start_index, end_index, history_size, target_size):
+    data = []
+    labels = []
+
+    start_index = start_index + history_size
+    if end_index is None:
+        end_index = len(dataset) - target_size
+
+    for i in range(start_index, end_index):
+        indices = range(i-history_size, i)
+        # Reshape data from (history_size,) to (history_size, 1)
+        data.append(np.reshape(dataset[indices], (history_size, 1)))
+        labels.append(dataset[i+target_size])
+        
+    return np.array(data), np.array(labels)
+
+
+def create_dataset(dataset, time_step=1):
+	dataX, dataY = [], []
+	for i in range(len(dataset)-time_step-1):
+		a = dataset[i:(i+time_step), 0]   ###i=0, 0,1,2,3-----99   100 
+		dataX.append(a)
+		dataY.append(dataset[i + time_step, 0])
+	return np.array(dataX), np.array(dataY)
+# adam=keras.optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
+def mean_absolute_percentage_error(y_true, y_pred): 
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return 100*np.mean(np.abs((y_true - y_pred) / y_true)) 
+def mape(actual, pred): 
+    actual, pred = np.array(actual), np.array(pred)
+    return np.mean(np.abs((actual - pred) / actual)) * 100
+
+
+def hurst(ts):
+    """Returns the Hurst Exponent of the time series vector ts"""
+    # Create the range of lag values
+    lags = range(2, 100)
+    
+    # Calculate the array of the variances of the lagged differences
+    tau = [sqrt(std(subtract(ts[lag:], ts[:-lag]))) for lag in lags]
+    
+    # Use a linear fit to estimate the Hurst Exponent
+    poly = polyfit(log(lags), log(tau), 1)
+    
+    # Return the Hurst exponent from the polyfit output
+    return poly[0]*2.0
+def plot_correlogram(x, lags=None, title=None):    
+    lags = min(10, int(len(x)/5)) if lags is None else lags
+    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(12, 8))
+    x.plot(ax=axes[0][0])
+    q_p = np.max(q_stat(acf(x, nlags=lags), len(x))[1])
+    stats = f'Q-Stat: {np.max(q_p):>8.2f}\nADF: {adfuller(x)[1]:>11.2f} \nHurst: {round(hurst(x.values),2)}'
+    axes[0][0].text(x=.02, y=.85, s=stats, transform=axes[0][0].transAxes)
+    probplot(x, plot=axes[0][1])
+    mean, var, skew, kurtosis = moment(x, moment=[1, 2, 3, 4])
+    s = f'Mean: {mean:>12.2f}\nSD: {np.sqrt(var):>16.2f}\nSkew: {skew:12.2f}\nKurtosis:{kurtosis:9.2f}'
+    axes[0][1].text(x=.02, y=.75, s=s, transform=axes[0][1].transAxes)
+    plot_acf(x=x, lags=lags, zero=False, ax=axes[1][0])
+    plot_pacf(x, lags=lags, zero=False, ax=axes[1][1])
+    axes[1][0].set_xlabel('Lag')
+    axes[1][1].set_xlabel('Lag')
+    fig.suptitle(title, fontsize=20)
+    fig.tight_layout()
+    fig.subplots_adjust(top=.9)
+adam=keras.optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=True)
+
+def build_model(input_length, input_dim):
+    d = 0.3 #對表層/隱層後每10個輸入去除3個變量
+    model = Sequential()
+
+    model.add(LSTM(256, input_shape=(input_length, input_dim), return_sequences=True))
+    model.add(Dropout(d))
+
+    model.add(LSTM(256, input_shape=(input_length, input_dim), return_sequences=False))
+    model.add(Dropout(d))
+   
+    model.add(Dense(1,kernel_initializer="uniform",activation='linear'))#linear / softmax(多分類) / sigmoid(二分法)
+
+    model.compile(loss='mse',optimizer=adam)#loss=mse/categorical_crossentropy
+    
+    
+    return model
+def t_test(group1, group2):
+    mean1 = np.mean(group1)
+    mean2 = np.mean(group2)
+    std1 = np.std(group1)
+    std2 = np.std(group2)
+    nobs1 = len(group1)
+    nobs2 = len(group2)
+    modified_std1 = np.sqrt(np.float32(nobs1)/
+                            np.float32(nobs1-1)) * std1
+    modified_std2 = np.sqrt(np.float32(nobs2)/
+                            np.float32(nobs2-1)) * std2
+    (statistic, pvalue) = stats.ttest_ind_from_stats(
+        mean1=mean1, std1=modified_std1, nobs1=nobs1,
+        mean2=mean2, std2=modified_std2, nobs2=nobs2 )
+    return statistic, pvalue
+def findnan(dataset):
+        
+    a=(dataset[dataset.isnull().values==True])
+    b=(dataset.isnull().sum())
+    return a , b  
+def multivariate_data(dataset, target, start_index, end_index, history_size,target_size, step, single_step=False):
+    data = []
+    labels = []
+
+    start_index = start_index + history_size
+    if end_index is None:
+        end_index = len(dataset) - target_size
+
+    for i in range(start_index, end_index):
+        indices = range(i-history_size, i, step)
+        data.append(dataset[indices])
+
+        if single_step:
+            labels.append(target[i+target_size])
+        else:
+            labels.append(target[i:i+target_size])
+
+    return np.array(data), np.array(labels)
+# from plotly.plotly import plot_mpl
+# from statsmodels.tsa.seasonal import seasonal_decompose
+
+def multi_step_history(dataset,target ,past_history ,future_target ,step ,split_size):
+    x_train_multi, y_train_multi = multivariate_data(dataset, dataset[:, 0], 0,
+                                                 int(len(dataset)*split_size), past_history,
+                                                 future_target, step)
+    x_val_multi, y_val_multi = multivariate_data(dataset, dataset[:, 0],
+                                             int(len(dataset)*split_size), None, past_history,
+                                             future_target, step)
+    return x_train_multi, y_train_multi ,x_val_multi, y_val_multi
+def multi_step_plot(history, true_future, prediction):
+    plt.figure(figsize=(18, 6))
+    num_in = create_time_steps(len(history))
+    num_out = len(true_future)
+
+    plt.plot(num_in, np.array(history[:, 0]), label='History')
+    plt.plot(np.arange(num_out)/STEP, np.array(true_future), 'bo',
+           label='True Future')
+    if prediction.any():
+        plt.plot(np.arange(num_out)/STEP, np.array(prediction), 'ro',
+                 label='Predicted Future')
+    plt.legend(loc='upper left')
+    plt.show()
+def datetime(dates):
+    date10=[]
+    for value in dates:
+        txt=value.replace("年" ,"-")
+        txt=txt.replace("月","-")
+        txt=txt.replace("日","")
+        date10.append(txt)
+    return date10
+#########從investing網站期貨價格抓資料時間
+def priceplot(feature,spotgood):
+   
+      ############soy
+    cornf=pd.read_csv("C:\\Users/user/Desktop/"+feature+".csv")
+##########想要提取 日期(給玉米現貨價格
+    cornprice = cornf.iloc[:,[0,1]]
+
+    date=cornprice["日期"]
+    dates = list(date.values)
+
+
+    date=datetime(dates)
+    #做一個日期
+    date=pd.DataFrame(date)
+    
+    date["1"]=pd.to_datetime(date[0])
+    date.drop(columns=0,axis=1,inplace=True)
+    cornprice["日期"]=date
+    cornprice.sort_values(by="日期",inplace=True)
+    cornprice.reset_index(drop=True,inplace=True)
+    
+
+    cornprice.set_index("日期",inplace=True)
+    cornprice=cornprice[69:]
+    scaler=MinMaxScaler(feature_range=(0,1))
+    cornf=scaler.fit_transform(np.array(cornprice).reshape(-1,1))
+    # 符合時間序列
+    data = pd.read_excel("C:\\Users/user/Desktop/"+spotgood+".xlsx")
+    date=cornprice["日期"]
+
+    
+    data["日期"]=date
+    data.set_index("日期",inplace=True)
+    scaler=MinMaxScaler(feature_range=(0,1))
+    corn=scaler.fit_transform(np.array(data).reshape(-1,1))
+
+    plt.figure(figsize=(15,10),dpi=80,linewidth = 10)
+    plt.plot(cornf,'s-',color = 'r', label="cornf")
+    plt.plot( corn     ,'o-'     ,color = 'g', label="corn")
+    # 設定圖片標題，以及指定字型設定，x代表與圖案最左側的距離，y代表與圖片的距離
+    plt.title("現貨期貨價差", x=0.5, y=1.03)
+    
+    # 设置刻度字体大小
+    plt.xticks(fontsize=20)
+    plt.yticks(fontsize=20)
+    # 標示x軸(labelpad代表與圖片的距離)
+    plt.xlabel("week", fontsize=20, labelpad = 20)
+    # 標示y軸(labelpad代表與圖片的距離)
+    plt.ylabel("price", fontsize=20, labelpad = 20)
+    # 顯示出線條標記位置
+    plt.legend(loc = "best", fontsize=20)
+
+    # 畫出圖片
+
+    plt.show()
+cornf=pd.read_csv("C:\\Users/user/Desktop/cornf.csv")
+##########想要提取 日期(給玉米現貨價格
+cornprice = cornf.iloc[:,[0,1]]
+
+date=cornprice["日期"]
+dates = list(date.values)
+
+
+date=datetime(dates)
+date=datetime(dates)
+    #做一個日期
+date=pd.DataFrame(date)
+date["1"]=pd.to_datetime(date[0])
+date.drop(columns=0,axis=1,inplace=True)
+cornprice["日期"]=date
+    # 符合時間序列
+cornprice.sort_values(by="日期",inplace=True)
+cornprice.reset_index(drop=True,inplace=True)
+date=cornprice["日期"]
+cornprice.set_index("日期",inplace=True)
+# result = seasonal_decompose(cornprice, model="multiplicative")
+# fig = result.plot()
+# plot_mpl(fig)
+ #做一個日期
+# cornprice.to_csv("D://python/anaconda3/cornf.csv")
+# df = pd.read_csv("D://python/anaconda3/cornf.csv", encoding='utf-8')
+# df.to_csv("D://python/anaconda3/cornf1.csv")
+# df.to_csv('cornf2.csv',index=False,encoding='utf-8-sig')
+# wheatprice["year"]=wheatprice["日期"].dt.year
+# time=wheatprice[wheatprice["year"]>2000]
+#####抓日期到資料上
+# time[["year","week","day"]]=time["日期"].dt.isocalendar()
+# time=time.groupby(["year","week"]).max()
+# time.reset_index(drop=True,inplace=True)
+# date = time["日期"][34:].reset_index(drop=True)
+# date.dt.isweekday
+###################   2020 年 12 月 6日 緊急授權
+def adf_test(data):
+    print("result of adf :" )
+    dftest =adfuller(data,autolag="AIC")
+    output=pd.Series(dftest[0:4],index=["test statistic","p-value",'lag used','number of observed'])
+    for key,value in dftest[4].items():
+        output["critical value (%s)"%key]=value
+    print (output) 
+def getDATA(df,dtype,start,end,mode,order,number):
+    if "soy" == df :
+        
+        data = pd.read_excel("C:\\Users/user/Desktop/"+df +".xlsx")
+        soytime=date[69:].reset_index(drop=True)
+        data["日期"]=soytime
+        data.set_index("日期",inplace=True)
+        data_d=np.log(data.iloc[:,0].pct_change(1)+1).dropna()
+        # data=np.log(data)
+        
+        # print(soy[soy.isnull().values==True])
+        # print(soy.isnull().sum())   
+        train = data[start:end]
+        test  =  data[end:] 
+        # test1  = data.iloc[-45:,0]
+        train_d =data_d[start:end]
+        test_d  =data_d[end:]
+        seasonal_d=pm.arima.nsdiffs(train,m=52)
+        arima_d=pm.arima.ndiffs(train)
+         ####差分#######################
+        try1=data[start:end]
+        try2=data[end:]
+        try1["dummy"]=0
+        try2["dummy"]=1
+        try3=pd.concat([try1,try2],axis=0)
+        try3.reset_index(inplace=True)
+        try3["time_idx"]=0
+        
+        for i in range(len(try3)):
+            try3["time_idx"][i]=i
+        y=try3.iloc[:,1]
+        x=try3.iloc[:,[3,2]]
+        x = sm.add_constant(x)
+        ols = sm.OLS(y,x)
+        results = ols.fit()
+        print(results.summary())
+        adf_test(train) #####  p=0.11 
+        adf_test(train_d) #########= p= 4.876457e-17
+    else:
+       3
+
+   
+
+
+    
+################### 檢測是否平穩
+    
+    #################如果要選擇
+    if "myself" == mode: 
+        plot_acf(train)
+        plt.title('acf(corn)')
+        plt.show()
+        plot_pacf(train)    
+        plt.title('pacf(corn)')
+        plt.show()
+        plot_acf(train_d)
+        plt.title('acf(corn)')
+        plt.show()
+        plot_pacf(train_d)    
+        plt.title('pacf(corn)')
+        plt.show()
+        ARMA = ARIMA(train, order=(order))     
+        model= ARMA.fit(disp=-1)
+        model.plot_predict()
+        a=model.predict()
+        print(model.summary())
+        residuals = DataFrame(model.resid)
+        residuals.plot()
+        residuals.plot(kind='kde')
+        print(residuals.describe())
+        print("ljubbox %s" %acorr_ljungbox(residuals, lags=[3], return_df=True))
+        
+        ####################garch實驗中
+        # garch = arch_model(model.resid, vol='garch', p=1, o=0, q=1,dist='Normal')
+        # garch = garch.fit()
+        # print(garch.summary())
+        # garch_forecast = garch.forecast(horizon=8,method='simulation',start=residuals[-1:])
+        # predicted_et = garch_forecast.residual_variance['h.8']
+        # fc=model.forecast(8)
+        # print(garch_forecast.residual_variance.tail())
+        
+      
+        X = train.values
+        train1  = X[:]
+        history = [x for x in train1]
+        predictions = []
+        
+        for t in range(len(test)):
+            smodel = ARIMA(history,order=(order))
+            smodel=smodel.fit(disp=0,transparmas=False)
+            obs = smodel.forecast(1)
+            # obs = obs[0]+res[t]
+            # garch_forecast = garch_model.forecast(horizon=1)
+            # predicted_et = garch_forecast.mean['h.1'].iloc[-1]
+            predictions.append(obs[0])
+            history.append(obs[0])
+        print(smodel.summary())
+        fc_series = pd.Series(predictions,index=test.index)
+
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(train, label='training')
+        plt.plot(test, label='actual')
+        plt.plot(fc_series, label='forecast')
+            
+        plt.title('Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show() 
+        # fc_series = pd.Series(fc, index=test.index)
+        # lower_series = pd.Series(conf[:, 0], index=test.index)
+        # upper_series = pd.Series(conf[:, 1], index=test.index)
+
+        # Plot
+        # plt.figure(figsize=(12,5), dpi=100)
+        # plt.plot(train, label='training')
+        # plt.plot(test, label='actual')
+        # plt.plot(fc_series, label='forecast')
+        # plt.fill_between(lower_series.index, lower_series, upper_series, 
+        #              color='k', alpha=.15)
+        # plt.title('Forecast vs Actuals')
+        # plt.legend(loc='upper left', fontsize=8)
+        # plt.show()
+        test1=test.iloc[:,0]
+        df["true"]=test1
+        df["pre"]=predictions
+        df["true-pre"]=df["true"]-df["pre"]
+        print(t_test(df["true"],df["pre"]))
+        # print("六個月內的誤差: %s" %forcasting)
+        # plt.figure(facecolor='white')
+        # final_y.plot(color='blue', label='Predict')
+        # train[-len(truey):].plot(color='red', label='Original')
+        # plt.legend(loc='best')
+        # plt.title('RMSE: %.4f'% np.sqrt(sum((train.iloc[-216:,0]-final_y)**2)/train[-216:].size))
+        # plt.show()
+        plt.figure(facecolor='white')
+        a.plot(color='blue', label='Predict')
+        train.iloc[-len(a):,0].plot(color='red', label='Original')
+        plt.legend(loc='best')
+        plt.title('RMSE: %.4f'% np.sqrt(sum((train.iloc[-len(a):,0]-a)**2)/train.size))
+        plt.show()
+        print(mean_absolute_percentage_error(train.iloc[-len(a):,0], a))
+        
+        return df
+    # if "arimagarch" ==mode:
+    #             #############固定窗格法 使用AUTO arima 重選參數以方便預測 使用 滾動式預測
+    #     X = cornprice.values
+    #     train1 = X[:]
+    #     history = [x for x in train1]
+    #     history=pd.DataFrame(history)
+    #     predictions = []
+    #     biassum=[]         
+    #     for t in range(10):
+    #         p= pm.auto_arima(history, start_p=1, start_q=1,
+    #                     max_p=5, max_q=5,maxiter =50,
+    #                trace=True,  error_action='ignore')
+    #         get_parametes= p.get_params()
+    #         order_a=get_parametes.get("order")
+    #         meanMdl = ag.ARMA(order = {'AR':order_a[0],'d':order_a[1] ,'MA':order_a[2]})
+    #         # meanMdl = ag.ARMA(order = {'AR':3,'d': 0 ,'MA':0})
+
+    #         volMdl = ag.garch(order = {'p':1,'q':1})
+    #         dist = ag.normalDist()
+    #         mdl = ag.empModel(history, meanMdl, volMdl, dist)
+    #         mdl.fit()
+    #         a,b=mdl.predict(nsteps=8)
+    #         obs=a+b
+    #         predictions.append(obs)
+    #         test1=test[(t)*8:(t+1)*8].reset_index(drop=True)
+    #         test1=test1.T.reset_index(drop=True).T.iloc[:,0]
+    #         history=pd.concat([history,test1],axis=0,ignore_index=True)
+    #         bias=((obs-test1)**2).sum()
+    #         biassum.append(bias)
+    #         print(a)
+    #     for t in range(20):
+    #         p= pm.auto_arima(history, start_p=1, start_q=1,
+    #                     max_p=5, max_q=5,maxiter =50,
+    #               trace=True,  error_action='ignore')
+    #         get_parametes= p.get_params()
+    #         order_a=get_parametes.get("order")
+    #         meanMdl = ag.ARMA(order = {'AR':order_a[0],'d':order_a[1] ,'MA':order_a[2]})
+    #         volMdl = ag.garch(order = {'p':1,'q':1})
+    #         dist = ag.normalDist()
+    #         mdl = ag.empModel(history, meanMdl, volMdl, dist)
+    #         mdl.fit()
+    #         a,b=mdl.predict(nsteps=4)
+    #         obs=a+b
+    #         predictions.append(obs)
+    #         test1=test[(t)*4:(t+1)*4].reset_index(drop=True)
+    #         test1=test1.T.reset_index(drop=True).T.iloc[:,0]
+    #         history=pd.concat([history,test1],axis=0,ignore_index=True)
+    #         bias=((obs-test1)**2).sum()
+    #         biassum.append(bias)
+            
+    if "stlcorn" ==mode : 
+        train=data["2015":end]
+        decomposition = seasonal_decompose(train,  model = 'additive', period=52, two_sided=False)  #timeseries时间序列数据
+        trend = decomposition.trend
+        seasonal = decomposition.seasonal
+        residual = decomposition.resid
+        decomposition.plot()
+        train_trend=trend[start:end]
+        train_res=residual[start:end]
+        s = seasonal["2018-04-01":"2019-10-18"].to_numpy()
+        X = train_trend.values
+        train1  = X[:]
+        history = [x for x in train1]
+        predictions = []
+         
+        for t in range(len(test)):
+            ARMA = ARIMA(history, order=(2,1,2))     
+            model1= ARMA.fit(disp=-1,transparmas=False)
+            obs = model1.forecast(1)
+            # garch_forecast = garch_model.forecast(horizon=1)
+            # predicted_et = garch_forecast.mean['h.1'].iloc[-1]
+            predictions.append(obs[0])
+            history.append(obs[0])
+        fc=predictions
+        Y = train_res.values
+        train1  = Y[:]
+        history = [x for x in train1]
+        predictions = []
+           
+        # smodel = pm.auto_arima(history, start_p=1, start_q=1,
+        #                                          max_p=5, max_q=5, m=52,
+        #                  max_P=3 , max_Q=3 ,
+        #                  seasonal=True,maxiter =50,
+        #                  trace=True,n_jobs=-1,
+        #                  error_action='ignore',scoring="mse",seasonal_test="ocsb") #in
+        for t in range(81):
+                ARMA = ARIMA(history, order=(3,0,0),)     
+                model1= ARMA.fit(disp=-1,transparmas=False)
+                obs = model1.forecast(1)
+                # garch_forecast = garch_model.forecast(horizon=1)
+                # predicted_et = garch_forecast.mean['h.1'].iloc[-1]
+                predictions.append(obs[0])
+                history.append(obs[0])        
+        rs=predictions
+        df1=pd.DataFrame(columns=["fc","rs","s"])
+        df1["fc"]=fc
+        df1["fc"]=df1["fc"].astype(float)
+        df1["rs"]=rs
+        df1["rs"]=df1["rs"].astype(float)
+        df1["s"]=s
+        df1["predict"]=df1.sum(axis=1)
+        predict=df1["predict"]
+        predict.index=test.index
+        # fc_series = pd.Series(predict,index=test.index)
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(train, label='training')
+        plt.plot(test, label='actual')
+        plt.plot(predict , label='forecast')
+
+        plt.title('Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show() 
+        df1["test"]=test.values
+        df1["test-pre"]=df1["test"].values-df1["predict"].values
+        ARMA = ARIMA(train_trend,order=(2,1,2))
+        model1= ARMA.fit(disp=-1)
+        a=model1.predict()
+        train_trend1= train_trend.shift(1)
+        model1.plot_predict()
+        diff_recover_1 = a.add(train_trend1).dropna()
+        seasonal = seasonal[diff_recover_1.index]
+        sarima = SARIMAX(train_res,order=(3,0,0),seasonal_oreder=(1,0,0,52))
+        model2= sarima.fit(disp=-1)
+        b = model2.predict(start=1,
+                               end=221,
+                               dynamic=False)
+        # b=model2.predict()
+        residuals = DataFrame(model2.resid)
+        residuals.plot()
+        residuals.plot(kind='kde')
+        print(model2.summary())
+        # b=pd.Series(smodel.predict(len(history)),index=train_res.index)
+        
+        # b=b[1:]
+        ori=train.iloc[53:,0]
+        
+        
+        final_predict=diff_recover_1+b+seasonal
+        
+        plt.figure(facecolor='white')
+        final_predict.plot(color='blue', label='Predict')
+        ori.plot(color='red', label='Original')
+        plt.legend(loc='best')
+        plt.title('RMSE: %.4f'% np.sqrt(sum((final_predict-ori)**2)/ori.size))
+        plt.show()
+        print(mean_absolute_percentage_error(ori, final_predict))
+        print(t_test(df1["test"],df1["predict"]))
+# print(model1.summary())
+        return df1
+    if "auto" ==mode :
+        
+            
+        smodel = pm.auto_arima(train, start_p=1, start_q=1,
+                                                  max_p=5, max_q=5, m=52,
+                          max_P=3 , max_Q=3 ,
+                          seasonal=True,maxiter =50,
+                          trace=True,n_jobs=-1,
+                          error_action='ignore',scoring="mse",seasonal_test="ocsb") #nformation_criterion="bic" 
+        # print(smodel.summary())
+        fc= smodel.predict(len(test), alpha=0.05)
+        
+        
+        
+        
+        fc_series = pd.Series(fc,index=test.index)
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(train, label='training')
+        plt.plot(test, label='actual')
+        plt.plot(fc_series, label='forecast')
+
+        plt.title('Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show()        
+        residuals = smodel.resid()
+       
+        test1=test.iloc[:,0]
+        df["true"]=test1
+        df["pre"]=fc
+        df["true-pre"]=df["true"]-df["pre"]
+        # a=mean_absolute_error(df["pre"],df["true"])
+        # b=np.sqrt(mean_squared_error(df["pre"],df["true"]))
+        # forcasting=[]
+        # for i in range(4,28,4):
+        #     forcasting.append(np.sqrt(mean_squared_error(df.iloc[:i,0],df.iloc[:i,1])))
+            
+        # print("mean_absolute_error: %f" %a)
+        # print("root_mean_squared_error: %f"  %b)
+        print(t_test(df["true"],df["pre"]))
+        # print("六個月內的誤差: %s" %forcasting)
+        
+        return df , smodel , train ,test  
+   
+    if  "hybird" ==mode:
+        ARMA = ARIMA(train, order=(order))     
+        model= ARMA.fit(disp=-1)
+        model.plot_predict()
+        a=model.predict()
+        print(model.summary())
+        residuals = DataFrame(model.resid)
+        residuals.plot()
+        residuals.plot(kind='kde')
+        print(residuals.describe())    
+        res=np.array(residuals).reshape(-1,1)
+        X = train.values
+       
+        
+        # scaler=MinMaxScaler(feature_range=(0,1))
+        # df1=scaler.fit_transform(np.array(model1.resid).reshape(-1,1))
+        
+        x_lstm,y_lstm=create_dataset(res,10)
+        x_lstm =x_lstm.reshape(x_lstm.shape[0],x_lstm.shape[1] , 1)
+        def model(input_length, input_dim):
+            d = 0.3 #對表層/隱層後每10個輸入去除3個變量
+            model = Sequential()
+
+            model.add(LSTM(256, input_shape=(input_length, input_dim), return_sequences=True))
+            model.add(Dropout(d))
+
+            model.add(LSTM(128, input_shape=(input_length, input_dim), return_sequences=False))
+            model.add(Dropout(d))
+   
+            model.add(Dense(1,kernel_initializer="uniform",activation='linear'))#linear / softmax(多分類) / sigmoid(二分法)
+
+            model.compile(loss='mse',optimizer='adam')#loss=mse/categorical_crossentropy
+    
+    
+            return model
+        lstm=model(10, 1)
+        # my_callbacks = [
+        #     tf.keras.callbacks.EarlyStopping(patience=500, monitor = 'val_loss'),
+        #     ]
+        # filepath="weights.best.hdf5"
+        # checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=1, save_best_only=True,
+        #                               mode='min')
+        # tensorboard_callback = [tf.keras.callbacks.TensorBoard(log_dir='.\\logs')]
+        # call_backlist=[my_callbacks,tensorboard_callback]
+        history = lstm.fit( x_lstm, y_lstm, batch_size=30,shuffle=False, epochs=1000)#
+        test_pre1=[]
+        # train_res= train_res.to_numpy()
+        first_eval_batch =res[-10:]
+        
+        current_batch =first_eval_batch.reshape((1,10,1))
+        
+        for i in range(len(test)):
+            current_pred= lstm.predict(current_batch)[0]
+            test_pre1.append(current_pred)
+            current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1)
+        train1  = X[:]
+        history = [x for x in train1]
+        predictions = []
+        for t in range(len(test)):
+            ARMA = ARIMA(history, order=(3,0,0))     
+            model1= ARMA.fit(disp=-1,transparmas=False)
+            obs = model1.forecast(1)
+            final= obs[0] + test_pre1[t]
+            predictions.append(final)
+            
+            history.append(final)
+        
+        #res=scaler.inverse_transform(test_pre1)
+        fc=predictions
+
+        
+        df["pre"]=fc
+        df["pre"]=df["pre"].astype(float)
+       
+        predict=df["pre"]
+        predict.index=test.index
+        # fc_series = pd.Series(predict,index=test.index)
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(train, label='training')
+        plt.plot(test, label='actual')
+        plt.plot(predict , label='forecast')
+
+        plt.title('Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show() 
+        df["test"]=test.values
+        df["test-pre"]=df["test"]-df["pre"]
+        print(t_test(df["test"],df["pre"]))    
+     
+        train_predict=lstm.predict(x_lstm)
+
+        y_lstm=y_lstm.reshape(-1,1)
+
+        train_predict=train_predict.reshape(-1)
+        ##########3繪製擬合情況
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(train_predict, label='training')
+        plt.plot(res[-212:], label='actual')
+
+        plt.title('Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show() 
+        ###############使用DF1
+        b=a[-212:].reset_index(drop=True)
+        final_predict=b +train_predict
+        ##############33
+        train_ori=train[-212:].reset_index(drop=True)
+        plt.figure(facecolor='white')
+        pd.Series(final_predict).plot(color='blue', label='Predict')
+        pd.Series(train_ori.iloc[:,0]).plot(color='red', label='Original')
+        plt.legend(loc='best')
+        plt.title('RMSE: %.4f'% np.sqrt(sum((final_predict-train_ori.iloc[:,0])**2)/train_ori.size))
+        plt.show()
+        print( mean_absolute_error(train_ori, final_predict))
+        print( mape(train_ori,final_predict))
+        return df
+        
+        
+        if dtype == 1 :##################預測
+            
+            #### 一步
+            bias=[]
+            X = train.values
+            train1  = X[:]
+            history = [x for x in train1]
+            arimaonestep=[]
+            for i in range(len(test)):
+                # arma= ARIMA(history,order=(3,0,0))
+                smodel = pm.auto_arima(history, start_p=1, start_q=1,
+                                                  max_p=5, max_q=5,
+                      maxiter =50,  trace=True,
+                          error_action='ignore',scoring="mse",seasonal_test="ocsb")
+                # model =arma.fit(disp=-1)
+                obs= smodel.predict(1)
+                difference =test.iloc[i,0]- obs[0]
+                bias.append(difference)
+                arimaonestep.append(obs)
+                history.append(test.iloc[i,0])
+                    #######arima lstm
+            X = train.values
+            train1  = X[:]
+            history = [x for x in train1]
+            bias4=[]
+            history=pd.DataFrame(history)
+            arimafourstep=[]
+            for i in range(20):
+                # arma= ARIMA(history,order=(3,0,0))
+                smodel = pm.auto_arima(history, start_p=1, start_q=1,
+                                                  max_p=5, max_q=5,
+                      maxiter =50,  trace=True,
+                          error_action='ignore',scoring="mse",seasonal_test="ocsb")
+                # model =arma.fit(disp=-1)
+                obs= smodel.predict(4)
+                difference =test.iloc[(i+1)*4,0]- obs[3]
+                bias4.append(difference)
+                arimafourstep.append(obs[3])
+                
+                test1=test[(i)*4:(i+1)*4].reset_index(drop=True)
+                test1=test1.T.reset_index(drop=True).T.iloc[:,0]
+                history=pd.concat([history,test1],axis=0)
+            history = [x for x in train1]          
+            bias8 = [ ]
+            pre8=[]
+            history=pd.DataFrame(history)
+            for i in range(10):
+                # arma= ARIMA(history,order=(3,0,0))
+                smodel = pm.auto_arima(history, start_p=1, start_q=1,
+                                                  max_p=5, max_q=5,
+                      maxiter =50,  trace=True,
+                          error_action='ignore',scoring="mse",seasonal_test="ocsb")
+                # model =arma.fit(disp=-1)
+                obs= smodel.predict(8)
+                pre8.append(obs[7])
+                difference =test.iloc[(i+1)*8,0]- obs[7]
+                bias8.append(difference)
+                test1=test[(i)*8:(i+1)*8].reset_index(drop=True)
+                test1=test1.T.reset_index(drop=True).T.iloc[:,0]
+                history=pd.concat([history,test1],axis=0)
+            
+        if dtype == 2: 
+             #############one step 
+                 history = [x for x in train1]
+                 biasarimalstm=[]
+                 prelstm=[]
+                 val=[]
+                 for i  in range(len(test)):
+                     p= pm.auto_arima(history, start_p=1, start_q=1,
+                            max_p=5, max_q=5,maxiter =50,
+                        trace=True,  error_action='ignore')
+                     obs = p.predict(1) 
+                     res1=p.resid()
+                     res_lstm=res1[-12:]
+                     res_lstm =res_lstm.reshape(1,res_lstm.shape[0] , 1)
+                     vol=lstm.predict(res_lstm)
+                     val.append(vol)
+                     if 0.305>vol >0.28 :
+                         final_predict = obs + vol
+                     elif  0.15 >vol >0.105:
+                         final_predict = obs + vol
+                     elif 0> vol > -0.09:
+                         final_predict = obs  + vol 
+                     elif 0.-133> vol > -0.134:
+                         final_predict = obs  + vol 
+                     else:
+                         final_predict =obs
+                     difference =test.iloc[i,0]- final_predict
+                     biasarimalstm.append(difference)
+                     prelstm.append(final_predict)
+                     history.append(test.iloc[i,0])
+                 history = [x for x in train1]
+                 biasarimalstm4=[]
+                 prelstm4=[]
+                 history=pd.DataFrame(history)
+                 
+                 for i  in range(20):
+                     p= pm.auto_arima(history, start_p=1, start_q=1,
+                         max_p=5, max_q=5,maxiter =50,
+                         trace=True,  error_action='ignore')
+                 # get_parametes= p.get_params()
+                 # order_a=get_parametes.get("order")
+                 # arma= ARIMA(history,order=order_a)
+                 # model = arma.fit(disp=-1)
+                     res1=p.resid()
+                     res1=np.array(res1)
+                     first_eval_batch =res1[-12:]
+                     vol_predict=[]
+                     current_batch =first_eval_batch.reshape((1,12,1))
+                  
+                     for k in range(4):
+                         current_pred= lstm.predict(current_batch)[0]
+                         vol_predict.append(current_pred)
+                         current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1) 
+                     arimalstmpredict4=[]
+                     X = history.values
+                     history  = X[:]
+                     dl4=[x for x in history]
+                     for t in range(4):
+                       
+                           
+                         p= pm.auto_arima(dl4, start_p=1, start_q=1,
+                         max_p=5, max_q=5,maxiter =50,
+                         trace=True,  error_action='ignore')
+                         obs = p.predict(1)
+                         final= obs + vol_predict[t]       
+                         arimalstmpredict4.append(final)
+                         dl4.append(final)
+                     prelstm4.append(arimalstmpredict4[3])
+                     difference =test.iloc[(i+1)*4,0]- arimalstmpredict4[3]
+                     biasarimalstm4.append(difference)
+                     test1=test[(i)*4:(i+1)*4].reset_index(drop=True)
+                     test1=test1.T.reset_index(drop=True).T.iloc[:,0]
+                     history=pd.DataFrame(history)
+                      
+                     history=pd.concat([history[:],test1],axis=0)
+                       # obs =p.predict(4) 
+                 # res1=p.resid()
+                 #  ###使用 dataframe 的 history 後RES資料型態會變成 series 因為 dataframe格式
+                 ####所以轉換成array維持資料型態 
+                 
+                 ###################33
+                   
+                # res_lstm =res_lstm.reshape(1,res_lstm.shape[0] , 1)
+                 # vol=lstm.predict(res_lstm)
+                   # final_predict=obs[3]+vol_predict[3]
+                   # for j in range(4):
+                   #     a=obs[j]+vol_predict[j]
+                   #     final_predict.append(a)
+                  
+                   
+                  
+                  
+                  
+                 history = [x for x in train1]
+                 biasarimalstm8=[]
+                 prelstm8=[]
+                 history=pd.DataFrame(history) 
+                 for i  in range(10):
+                     p= pm.auto_arima(history, start_p=1, start_q=1,
+                         max_p=5, max_q=5,maxiter =50,
+                         trace=True,  error_action='ignore')
+                 # get_parametes= p.get_params()
+                 # order_a=get_parametes.get("order")
+                 # arma= ARIMA(history,order=order_a)
+                 # model = arma.fit(disp=-1)
+                     res1=p.resid()
+                     res1=np.array(res1)
+                     first_eval_batch =res1[-12:]
+                     vol_predict=[]
+                     current_batch =first_eval_batch.reshape((1,12,1))
+
+                     for k in range(8):
+                         current_pred= lstm.predict(current_batch)[0]
+                         vol_predict.append(current_pred)
+                         current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1) 
+                     arimalstmpredict8=[]
+                     X = history.values
+                     history  = X[:]
+                     dl8=[x for x in history]
+                     for t in range(8):
+                       
+                           
+                         p= pm.auto_arima(dl8, start_p=1, start_q=1,
+                         max_p=5, max_q=5,maxiter =50,
+                         trace=True,  error_action='ignore')
+                         obs = p.predict(1)
+                         final= obs + vol_predict[t]       
+                         arimalstmpredict8.append(final)
+                         dl8.append(final)
+                     prelstm8.append(arimalstmpredict8[7])
+                     difference =test.iloc[(i+1)*8,0]- arimalstmpredict8[7]
+                     biasarimalstm4.append(difference)
+                     test1=test[(i)*8:(i+1)*8].reset_index(drop=True)
+                     test1=test1.T.reset_index(drop=True).T.iloc[:,0]
+                     history=pd.DataFrame(history)
+
+                     history=pd.concat([history[:],test1],axis=0)
+                       # obs =p.predict(4)     
+                 # p= pm.auto_arima(history, start_p=1, start_q=1,
+                 #        max_p=5, max_q=5,maxiter =50,
+                 #    trace=True,  error_action='ignore')
+                 # # get_parametes= p.get_params()
+                 # # order_a=get_parametes.get("order")
+                 # # arma= ARIMA(history,order=order_a)
+                 # # model = arma.fit(disp=-1)
+                 # obs = p.predict(8) 
+                 # res1=p.resid()
+                 # ####使用 dataframe 的 history 後RES資料型態會變成 series 因為 dataframe格式
+                 # ####所以轉換成array維持資料型態 
+                 
+                 # ###################33
+                 # res1=np.array(res1)
+                 # first_eval_batch =res1[-12:]
+                 # vol_predict=[]
+                 # current_batch =first_eval_batch.reshape((1,12,1))
+        
+                 # for k in range(8):
+                 #     current_pred= lstm.predict(current_batch)[0]
+                 #     vol_predict.append(current_pred)
+                 #     current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1)
+                 # # res_lstm =res_lstm.reshape(1,res_lstm.shape[0] , 1)
+                 # # vol=lstm.predict(res_lstm)
+                 # final_predict8=[]
+                 # for j in range(8):
+                 #     a=obs[j]+vol_predict[j]
+                 #     final_predict8.append(a)
+                 # difference =test.iloc[i*8:(i+1)*8,0]- final_predict8[0]
+                 # biasarimalstm8.append(difference)
+                 # prelstm8.append(final_predict)
+                 # test1=test[(i)*8:(i+1)*8].reset_index(drop=True)
+                 # test1=test1.T.reset_index(drop=True).T.iloc[:,0]
+                 # history=pd.concat([history,test1],axis=0)
+                                                                    
+    
+    if "dl" ==mode:
+    
+        seq_length=number
+        
+        if  dtype == 1 :
+            scaler=MinMaxScaler(feature_range=(0,1))
+            df1=scaler.fit_transform(np.array(data[start:]).reshape(-1,1))
+            training_lstm =df1[:int(len(train)*0.8)]
+            vaild_lstm= df1[int(len(train)*0.8):int(len(train))]
+            test_lstm=df1[-len(test):]
+            x_lstm,y_lstm=create_dataset(training_lstm,seq_length)
+            x_lstm =x_lstm.reshape(x_lstm.shape[0],x_lstm.shape[1] , 1)
+            x_vaild , y_vaild = create_dataset(vaild_lstm,seq_length )
+            x_vaild =x_vaild.reshape(x_vaild.shape[0],x_vaild.shape[1] , 1)
+
+
+            model=build_model(seq_length, 1)
+            my_callbacks = [
+                tf.keras.callbacks.EarlyStopping(patience=150, monitor = 'val_loss'),
+                ]
+            filepath="weights.best.hdf5"
+            checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=1, save_best_only=True,
+                                      mode='min')
+            tensorboard_callback = [tf.keras.callbacks.TensorBoard(log_dir='.\\logs')]
+            call_backlist=[my_callbacks,checkpoint,tensorboard_callback]
+            call_backlist=[my_callbacks,checkpoint,tensorboard_callback]#callbacks=call_backlist,
+            history = model.fit( x_lstm, y_lstm, batch_size=30,shuffle=True, epochs=1000,callbacks=call_backlist,validation_data=(x_vaild,y_vaild))#
+
+##Transformback to original form
+
+
+            test_pre=[]
+            first_eval_batch =vaild_lstm[-seq_length:]
+            current_batch =first_eval_batch.reshape((1,seq_length,1))
+
+
+            for i in range(len(test_lstm)):
+                current_pred= model.predict(current_batch)[0]
+                test_pre.append(current_pred)
+                current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1)
+           
+            test1=scaler.inverse_transform(test_lstm)
+        
+            pre1=scaler.inverse_transform(test_pre)
+
+            plt.plot(pre1,color='red', label='Prediction')
+            plt.plot(test1,color='blue', label='Answer')
+            plt.legend(loc='best')
+            plt.show()
+            
+            test2 = test.iloc[:,0]
+            df["true"]=test2
+            df["pre"]=pre1
+            df["true-pre"]=df["true"]-df["pre"]
+            train_predict=model.predict(x_lstm)
+            train_predict=scaler.inverse_transform(train_predict)
+            y_lstm=y_lstm.reshape(-1,1)
+            train_ori = scaler.inverse_transform(y_lstm)
+            q0=math.sqrt(mean_squared_error(train_ori,train_predict))
+            q1=mape(train_ori, train_predict)
+            print("train rmse: %f" %q0)
+            print("train mape %f" %q1)
+            train_ori=train_ori.reshape(-1)
+            train_predict=train_predict.reshape(-1)
+            
+            
+            
+            plt.figure(facecolor='white')
+            pd.Series(train_predict).plot(color='blue', label='Predict')
+            pd.Series(train_ori).plot(color='red', label='Original')
+            plt.legend(loc='best')
+            plt.title('RMSE: %.4f'% np.sqrt(sum((train_predict-train_ori)**2)/train_ori.size))
+            plt.show()
+            return df
+        if  dtype == 2 :
+            scaler=MinMaxScaler(feature_range=(0,1))
+            df1=scaler.fit_transform(np.array(data[start:]).reshape(-1,1))
+            training_lstm =df1[:len(train)]
+            test_lstm=df1[-len(test):]
+            x_lstm,y_lstm=create_dataset(training_lstm,seq_length)
+            x_lstm =x_lstm.reshape(x_lstm.shape[0],x_lstm.shape[1] , 1)
+        # x_vaild , y_vaild = create_dataset(vaild_lstm,seq_length )
+        # x_vaild =x_vaild.reshape(x_vaild.shape[0],x_vaild.shape[1] , 1)
+
+
+            model=build_model(seq_length, 1)
+            my_callbacks = [
+                tf.keras.callbacks.EarlyStopping(patience=500, monitor = 'val_loss'),
+                ]
+            filepath="weights.best.hdf5"
+            checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=1, save_best_only=True,
+                                     mode='min')
+            tensorboard_callback = [tf.keras.callbacks.TensorBoard(log_dir='.\\logs')]
+            call_backlist=[my_callbacks,checkpoint,tensorboard_callback]
+#call_backlist=[my_callbacks,checkpoint,tensorboard_callback]#callbacks=call_backlist,
+            history = model.fit( x_lstm, y_lstm, batch_size=32,shuffle=True, epochs=3000,callbacks=call_backlist,validation_split=0.2)
+            #
+
+##Transformback to original form
+
+
+            test_pre=[]
+            first_eval_batch =training_lstm[-seq_length:]
+            current_batch =first_eval_batch.reshape((1,seq_length,1))
+
+
+            for i in range(len(test_lstm)):
+                current_pred= model.predict(current_batch)[0]
+                test_pre.append(current_pred)
+                current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1)
+            
+
+
+
+            test1=scaler.inverse_transform(test_lstm)
+        
+            pre1=scaler.inverse_transform(test_pre)
+
+            plt.plot(pre1,color='red', label='Prediction')
+            plt.plot(test1,color='blue', label='Answer')
+            plt.legend(loc='best')
+            plt.show()
+            
+            
+            test1=test.iloc[:,0]
+            df["true"]=test1
+            df["pre"]=pre1
+            df["true-pre"]=df["true"]-df["pre"]
+            # a=mean_absolute_error(df["pre"],df["true"])
+            # b=np.sqrt(mean_squared_error(df["pre"],df["true"]))
+            # forcasting=[]
+            # for i in range(4,28,4):
+            #     forcasting.append(np.sqrt(mean_squared_error(df.iloc[:i,0],df.iloc[:i,1])))
+                
+            # print("mean_absolute_error: %f" %a)
+            # print("root_mean_squared_error: %f"  %b)
+            # print(t_test(df["true"],df["pre"]))
+            # print("六個月內的誤差: %s" %forcasting)
+            train_predict=model.predict(x_lstm)
+            train_predict=scaler.inverse_transform(train_predict)
+            y_lstm=y_lstm.reshape(-1,1)
+            train_ori = scaler.inverse_transform(y_lstm)
+            q0=math.sqrt(mean_squared_error(train_ori,train_predict))
+            q1=mape(train_ori, train_predict)
+            print("train rmse: %f" %q0)
+            print("train mape %f" %q1)
+            
+            train_ori=train_ori.reshape(-1)
+            train_predict=train_predict.reshape(-1)
+            plt.figure(facecolor='white')
+            pd.Series(train_predict).plot(color='blue', label='Predict')
+            pd.Series(train_ori).plot(color='red', label='Original')
+            plt.legend(loc='best')
+            plt.title('RMSE: %.4f'% np.sqrt(sum((train_predict-train_ori)**2)/train_ori.size))
+            plt.show()
+            
+            lstmone=[]
+            first_eval_batch =vaild_lstm[-seq_length:]
+            current_batch =first_eval_batch.reshape((1,seq_length,1))
+            
+
+            for i in range(len(test)):
+                current_pred= model.predict(current_batch)[0]
+                lstmone.append(current_pred)
+                current_batch = np.append(current_batch[:,1:,:],[[test_lstm[i]]],axis=1)            
+            onestep=scaler.inverse_transform(lstmone)
+   
+                # for i in range(4):
+                #     current_pred= model.predict(current_batch)[0]    
+            return df 
+        if  dtype == 3 :
+            scaler=MinMaxScaler(feature_range=(0,1))
+            df1=scaler.fit_transform(np.array(data[start:]).reshape(-1,1))
+            training_lstm =df1[:len(train)]
+            test_lstm=df1[-len(test):]
+            x_lstm,y_lstm=create_dataset(training_lstm,seq_length)
+            x_lstm =x_lstm.reshape(x_lstm.shape[0],x_lstm.shape[1] , 1)
+            
+
+            model=build_model(seq_length, 1)
+            # my_callbacks = [
+            #     tf.keras.callbacks.EarlyStopping(patience=200, monitor = 'val_loss'),
+            #     ]
+            # filepath="weights.best.hdf5"
+            # checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=1, save_best_only=True,
+            #                           mode='min')
+            # tensorboard_callback = [tf.keras.callbacks.TensorBoard(log_dir='.\\logs')]
+            # call_backlist=[my_callbacks,checkpoint,tensorboard_callback]
+            # call_backlist=[my_callbacks,checkpoint,tensorboard_callback]#callbacks=call_backlist,
+            history = model.fit( x_lstm, y_lstm, batch_size=30,shuffle=True, epochs=1000)#
+
+##Transformback to original form
+
+
+            
+            test_pre=[]
+            first_eval_batch =training_lstm[-seq_length:]
+            current_batch =first_eval_batch.reshape((1,seq_length,1))
+
+
+            for i in range(len(test_lstm)):
+                current_pred= model.predict(current_batch)[0]
+                test_pre.append(current_pred)
+                current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1)
+            
+
+
+
+            test1=scaler.inverse_transform(test_lstm)
+        
+            pre1=scaler.inverse_transform(test_pre)
+
+            plt.plot(pre1,color='red', label='Prediction')
+            plt.plot(test1,color='blue', label='Answer')
+            plt.legend(loc='best')
+            plt.show()
+            
+            
+            test1=test.iloc[:,0]
+            df["true"]=test1
+            df["pre"]=pre1
+            df["true-pre"]=df["true"]-df["pre"]
+            # a=mean_absolute_error(df["pre"],df["true"])
+            # b=np.sqrt(mean_squared_error(df["pre"],df["true"]))
+            # forcasting=[]
+            # for i in range(4,28,4):
+            #     forcasting.append(np.sqrt(mean_squared_error(df.iloc[:i,0],df.iloc[:i,1])))
+                
+            # print("mean_absolute_error: %f" %a)
+            # print("root_mean_squared_error: %f"  %b)
+            # print(t_test(df["true"],df["pre"]))
+            # print("六個月內的誤差: %s" %forcasting)
+            train_predict=model.predict(x_lstm)
+            train_predict=scaler.inverse_transform(train_predict)
+            y_lstm=y_lstm.reshape(-1,1)
+            train_ori = scaler.inverse_transform(y_lstm)
+            q0=math.sqrt(mean_squared_error(train_ori,train_predict))
+            q1=100*mean_absolute_error(train_ori, train_predict)
+            print("train rmse: %f" %q0)
+            print("train mape %f" %q1)
+            
+            train_ori=train_ori.reshape(-1)
+            train_predict=train_predict.reshape(-1)
+            plt.figure(facecolor='white')
+            pd.Series(train_predict).plot(color='blue', label='Predict')
+            pd.Series(train_ori).plot(color='red', label='Original')
+            plt.legend(loc='best')
+            plt.title('RMSE: %.4f'% np.sqrt(sum((train_predict-train_ori)**2)/train_ori.size))
+            plt.show()
+            return df
+            first_eval_batch =vaild_lstm[-seq_length:]
+            predict=[]
+            current_batch =first_eval_batch.reshape((1,seq_length,1))
+            for i  in range(20):
+                     
+                     first_eval_batch4=current_batch
+                     predict4=[]
+                     current_batch4 =first_eval_batch4.reshape((1,seq_length,1))
+                     
+                     for k in range(4):
+                         current_pred= model.predict(current_batch4)[0]
+                         predict4.append(current_pred)
+                         current_batch4 = np.append(current_batch4[:,1:,:],[[current_pred]],axis=1) 
+                     current_batch = np.append(current_batch[:,4:,:],[test_lstm[i*4:(i+1)*4]],axis=1) 
+                     predict.append(predict4[3]) 
+                     print(("*")*50)
+                     print(predict)
+            fourstep=scaler.inverse_transform(predict)
+            first_eval_batch =training_lstm[-seq_length:]
+            predict=[]
+            current_batch =first_eval_batch.reshape((1,seq_length,1))
+            for i  in range(10):
+                     
+                     first_eval_batch8=current_batch
+                     predict8=[]
+                     current_batch =first_eval_batch8.reshape((1,seq_length,1))
+                     
+                     for k in range(8):
+                         current_pred= model.predict(current_batch)[0]
+                         predict8.append(current_pred)
+                         current_batch8 = np.append(current_batch[:,1:,:],[[current_pred]],axis=1) 
+                     current_batch = np.append(current_batch[:,8:,:],[test_lstm[i*8:(i+1)*8]],axis=1) 
+                     predict.append(predict8[7]) 
+                     print(("*")*50)
+                     print(predict)
+            eightstep=scaler.inverse_transform(predict)
+
+#############
+
+
+##################ˇˇˇ
+
+
+# trytry=getDATA("corn",1,"2016","2020-04-01","dl",(3,0,0),12)
+
+# df4=getDATA("corn",2,"2016","2020-04-01","dl",(3,0,0),26)
+end="2020-04-01"
+df="corn"
+start="2016"
+df=pd.DataFrame(columns=['true','pre'])
+df["true"]=test.iloc[:,0].values
+df["pre"]=arimaonestep
+df["pre"]=df["pre"].astype(float)
+gogo=math.sqrt(mean_squared_error(df["true"],df["pre"]))
+gogo2 =mape(df["true"],df["pre"])
+print(gogo)
+print(gogo2)
+# for i in range(20):
+#     a=arimafourstep[i].reshape(-1)
+#     a=pd.Series(a)
+#     c=pd.concat([c,a],axis=0)
+c=pd.DataFrame()
+for i in range(20):
+    a=test.iloc[(i+1)*4,0]
+    a=pd.Series(a)
+    c= pd.concat([c,a],axis=0)
+c["pre"]=fourstep
+gogo=math.sqrt(mean_squared_error(c[0],c["pre"]))
+gogo2 =mape(c[0],c["pre"])
+print(gogo)
+print(gogo2)
+c=pd.DataFrame()
+for i in range(20):
+    a=test.iloc[(i+1)*4,0]
+    a=pd.Series(a)
+    c= pd.concat([c,a],axis=0)
+c["pre"]=prelstm4
+gogo=math.sqrt(mean_squared_error(c[0],c["pre"]))
+gogo2 =mape(c[0],c["pre"])
+c=pd.DataFrame()
+for i in range(10):
+    a=test.iloc[(i+1)*8,0]
+    a=pd.Series(a)
+    c= pd.concat([c,a],axis=0)
+c["pre"]=prelstm8
+gogo=math.sqrt(mean_squared_error(c[0],c["pre"]))
+gogo2 =mape(c[0],c["pre"])
+print(gogo)
+print(gogo2)
+#######################3
+df=pd.DataFrame(columns=['true','pre'])
+df["true"]=test.iloc[:,0].values
+df["pre"]=onestep
+df["pre"]=df["pre"].astype(float)
+gogo=math.sqrt(mean_squared_error(df["true"],df["pre"]))
+gogo2 =mape(df["true"],df["pre"])
+print(gogo)
+print(gogo2)
+c=pd.DataFrame()
+# for i in range(20):
+#     a=prelstm4[i]
+#     a=pd.Series(a)
+#     c=pd.concat([c,a],axis=0)
+# c["true"]=test.iloc[:80,0].values
+# gogo=math.sqrt(mean_squared_error(c["true"],c[0]))
+# gogo2 =mape(c["true"],c[0])
+# print(gogo)
+# print(gogo2)
+
+
+
