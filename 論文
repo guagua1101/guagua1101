@@ -1,0 +1,1208 @@
+import pandas as pd 
+import datetime
+import numpy as np
+import math
+
+import matplotlib.pyplot as plt
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import grangercausalitytests
+from statsmodels.tsa.vector_ar.svar_model import VARResults 
+from statsmodels.tsa.vector_ar.vecm import coint_johansen
+from statsmodels.tsa.api import VAR
+from statsmodels.stats.stattools import durbin_watson
+from sklearn.metrics import mean_absolute_error,mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
+import xgboost as xg
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.svm import SVR
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import GridSearchCV
+
+##################
+import plotly.graph_objects as go
+import plotly.io as pio
+import plotly.express as px
+pio.renderers.default = 'browser'
+def root_mean_squared_error(y_true, y_pred):
+        return math.sqrt(np.mean(np.square(y_pred - y_true)))
+ 
+def create_dataset(dataset, time_step=1):
+	dataX, dataY = [], []
+	for i in range(len(dataset)-time_step):
+		a = dataset[i:(i+time_step), 0]   ###i=0, 0,1,2,3-----99   100 
+		dataX.append(a)
+		dataY.append(dataset[i + time_step, 0])
+	return np.array(dataX), np.array(dataY)
+
+
+
+def invert_transformation(df_train, df_forecast, second_diff=False):
+    """Revert back the differencing to get the forecast to original scale."""
+    df_fc = df_forecast.copy()
+    columns = df_train.columns
+    for col in columns:        
+        #Roll back 2nd Diff
+        if second_diff:
+            df_fc[str(col)+'_1d'] = (df_train[col].iloc[-1]-df_train[col].iloc[-2]) + df_fc[str(col)+'_2d'].cumsum()
+        #Roll back 1st Diff
+        df_fc[str(col)+'_forecast'] = df_train[col].iloc[-1] + df_fc[str(col)+'pre'].cumsum()
+
+    return df_fc
+    
+def adfuller_test(series, signif=0.05, name='', verbose=False):
+    """Perform ADFuller to test for Stationarity of given series and print report"""
+    r = adfuller(series, autolag='AIC',regression="ct",maxlag=3)
+    output = {'test_statistic':round(r[0], 4), 'pvalue':round(r[1], 4), 'n_lags':round(r[2], 4), 'n_obs':r[3]}
+    p_value = output['pvalue'] 
+    def adjust(val, length= 6): return str(val).ljust(length)
+
+    # Print Summary
+    print(f'    Augmented Dickey-Fuller Test on "{name}"', "\n   ", '-'*47)
+    print(f' Null Hypothesis: Data has unit root. Non-Stationary.')
+    print(f' Significance Level    = {signif}')
+    print(f' Test Statistic        = {output["test_statistic"]}')
+    print(f' No. Lags Chosen       = {output["n_lags"]}')
+
+    for key,val in r[4].items():
+        print(f' Critical value {adjust(key)} = {round(val, 3)}')
+
+    if p_value <= signif:
+        print(f" => P-Value = {p_value}. Rejecting Null Hypothesis.")
+        print(f" => Series is Stationary.")
+    else:
+        print(f" => P-Value = {p_value}. Weak evidence to reject the Null Hypothesis.")
+        print(f" => Series is Non-Stationary.") 
+ 
+
+def grangers_causation_matrix(data, variables, test='ssr_chi2test', verbose=False):    
+    """Check Granger Causality of all possible combinations of the Time series.
+    The rows are the response variable, columns are predictors. The values in the table 
+    are the P-Values. P-Values lesser than the significance level (0.05), implies 
+    the Null Hypothesis that the coefficients of the corresponding past values is 
+    zero, that is, the X does not cause Y can be rejected.
+
+    data      : pandas dataframe containing the time series variables
+    variables : list containing names of the time series variables.
+    """
+    maxlag=6
+    test = 'ssr_chi2test'
+    df = pd.DataFrame(np.zeros((len(variables), len(variables))), columns=variables, index=variables)
+    for c in df.columns:
+        for r in df.index:
+            test_result = grangercausalitytests(data[[r, c]], maxlag=maxlag, verbose=False)
+            p_values = [round(test_result[i+1][0][test][1],4) for i in range(maxlag)]
+            if verbose: print(f'Y = {r}, X = {c}, P Values = {p_values}')
+            min_p_value = np.min(p_values)
+            df.loc[r, c] = min_p_value
+    df.columns = [var + '_x' for var in variables]
+    df.index = [var + '_y' for var in variables]
+    return df
+
+def cointegration_test(df, num,alpha=0.05): 
+    """Perform Johanson's Cointegration Test and Report Summary"""
+    out = coint_johansen(df,-1, num)
+    d = {'0.90':0, '0.95':1, '0.99':2}
+    traces = out.lr1
+    cvts = out.cvt[:, d[str(1-alpha)]]
+    def adjust(val, length= 6): return str(val).ljust(length)
+
+    # Summary
+    print('Name   ::  Test Stat > C(95%)    =>   Signif  \n', '--'*20)
+    for col, trace, cvt in zip(df.columns, traces, cvts):
+        print(adjust(col), ':: ', adjust(round(trace,2), 9), ">", adjust(cvt, 8), ' =>  ' , trace > cvt)
+def mean_absolute_percentage_error(y_true, y_pred): 
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return 100*np.mean(np.abs((y_true - y_pred) / y_true)) 
+def mape(actual, pred): 
+    actual, pred = np.array(actual), np.array(pred)
+    return np.mean(np.abs((actual - pred) / actual)) * 100
+
+
+
+
+
+class getvar():
+    def __init__(self):
+        self.pig=pd.read_excel("C:\\Users/user/Desktop/碩論資料檔final/豬肉傳導效果.xlsx")
+        self.pig.set_index("date",drop=True,inplace=True)
+        # self.pig["pigmix"]=self.pig["大豬"]*0.281+self.pig["中豬"]*0.281+self.pig["小豬"]*0.438
+        self.egg=pd.read_excel("C:\\Users/user/Desktop/碩論資料檔final/egg_run.xlsx")
+        self.egg.set_index("date",drop=True,inplace=True)
+
+
+
+
+    def getdata(self,pig,cut,cut1,cut2 ,end):
+        self.pig=pig.copy()
+        # prepig=pig["2020-03":]
+        
+        # pig=pig[:"2018-12"]
+        train_pig=pig[:cut]
+        val_pig=pig[cut1:cut2]
+        pig=pig[:end]
+
+        return pig ,train_pig , val_pig
+    
+    def chose (self, mode):
+        
+        if  mode == "df":
+            varpig=self.pig[['corn','soy','small','rgpig','repig']]
+            for i in range(len(varpig.columns)):
+                varpig.iloc[:,i]=np.log(varpig.iloc[:,i])   
+
+            return varpig
+
+    # varpig=pig[['玉米','豆粉','pigmix','規格豬','合成豬價']]
+        if  mode ==  "predict":
+        # global varpre
+            varpre=val_pig[['corn','soy','small','rgpig','repig']]
+            for i in range(len(varpre.columns)):
+                varpre.iloc[:,i]=np.log(varpre.iloc[:,i])
+            return varpre
+        
+        if  mode == "train":
+            varpig=train_pig[['corn','soy','small','rgpig','repig']]
+            for i in range(len(varpig.columns)):
+                varpig.iloc[:,i]=np.log(varpig.iloc[:,i])   
+
+            return varpig
+    def adftest(self,df):
+        for name, column in df.iteritems():
+            adfuller_test(column, name=column.name)
+            print('\n')
+    def order(self,dif,number):
+        model = VAR(dif)   
+        order=model.select_order(number)
+        print(order.summary())
+    def varmodel(self,train,number):
+        model = VAR(train)   
+        model_fitted = model.fit(number) 
+        print(model_fitted.summary())
+        return model_fitted
+    def granger(self,df):
+        return  grangers_causation_matrix(df, variables= df.columns)
+    def dub (self,res):
+        out = durbin_watson(res)
+        for col, val in zip(varpig.columns, out):
+            print(col, ':', round(val, 2))
+    def forecast (self,lag,df,forecast_number,model_fitted):
+        lag_order=lag
+        forecast_input = df.values[-lag_order:]
+        nobs=forecast_number
+        fc = model_fitted.forecast(y=forecast_input, steps=nobs)
+        df_forecast = pd.DataFrame(fc, index=varpre.index[-nobs:], columns=varpig.columns+'pre')# + '_1d'
+        # df_results = invert_transformation(varpig, df_forecast,first_diff=False, second_diff=False)        
+        fig, axes = plt.subplots(nrows=int(len(varpig.columns)/2), ncols=3, dpi=150, figsize=(10,10))
+        for i, (col,ax) in enumerate(zip(varpig.columns, axes.flatten())):
+            df_forecast[col+"pre"].plot(legend=True, ax=ax).autoscale(axis='x',tight=True)
+            varpre[col][-nobs:].plot(legend=True, ax=ax);
+            ax.set_title(col + ": Forecast vs Actuals")
+            ax.xaxis.set_ticks_position('none')
+            ax.yaxis.set_ticks_position('none')
+            ax.spines["top"].set_alpha(0)
+            ax.tick_params(labelsize=6)
+        plt.tight_layout();
+        return df_forecast
+df=getvar()
+pig=df.pig
+pig1=pig.copy()
+pig,train_pig ,val_pig =df.getdata(pig,"2020-3","2020-04","2022-1" ,"2022-1" )
+varpig=df.chose("train")
+vardf=df.chose("df")
+
+
+
+
+
+weekdata=pd.read_excel("C:\\Users/user/Desktop/碩論資料檔final/資料檔.xlsx")
+weekdata.set_index("Date",inplace=True)
+plt.figure(figsize=(10,6),dpi=100,)
+plt.plot(weekdata["soyp"]["2015":],label='豆粉',alpha=1)
+plt.title('豆粉價格')
+plt.xlabel('Date')  
+plt.ylabel('Price')
+plt.legend()
+plt.plot()
+
+
+
+plt.figure(figsize=(10,6),dpi=100,)
+plt.plot(pig["corn"],label='玉米',alpha=1)
+plt.title('玉米月價格')
+plt.xlabel('Date')  
+plt.ylabel('Price')
+plt.legend()
+plt.plot()
+
+plt.figure(figsize=(10,6),dpi=100,)
+plt.plot(pig["soy"],label='豆粉',alpha=1)
+plt.title('豆粉月價格')
+plt.xlabel('Date')  
+plt.ylabel('Price')
+plt.legend()
+plt.plot()
+
+
+plt.figure(figsize=(10,6),dpi=100,)
+plt.plot(pig["small"],label='飼料',alpha=1)
+plt.title('飼料月價格')
+plt.xlabel('Date')  
+plt.ylabel('Price')
+plt.legend()
+plt.plot()
+
+
+plt.figure(figsize=(10,6),dpi=100,)
+plt.plot(pig["rgpig"],label='豬肉批發',alpha=1)
+plt.title('豬肉批發月價格')
+plt.xlabel('Date')  
+plt.ylabel('Price')
+plt.legend()
+plt.plot()
+
+
+plt.figure(figsize=(10,6),dpi=100,)
+plt.plot(pig["repig"],label='豬肉零售',alpha=1)
+plt.title('豬肉零售月價格')
+plt.xlabel('Date')  
+plt.ylabel('Price')
+plt.legend()
+plt.plot()
+
+
+
+
+
+
+
+def status(x) : 
+    return pd.Series([x.count(),x.min(),x.idxmin(),x.quantile(.25),x.median(),
+                      x.quantile(.75),x.mean(),x.max(),x.idxmax(),x.mad(),x.var(),
+                      x.std(),x.skew(),x.kurt()],index=['總數','最小值','最小值位置','25%分位數',
+                    '中位數','75%分位數','均值','最大值','最大值位數','平均絕對偏差','方差','標準差','偏度','峰度'])
+status(pig["small"]["2020-04":])
+
+vardf.corr()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# df.adftest(varpig)
+# df.granger(varpig)
+# df.order(varpig,6)
+# model_fitted=df.varmodel(varpig,6)
+# print(model_fitted.summary())
+# forecast_input = varpig.values[-lag_order:]
+
+# model_fitted=df.varmodel(varpig_d,6)
+
+# fc = model_fitted.forecast(y=forecast_input, steps=nobs,exog_future=exog)
+# df_forecast = pd.DataFrame(fc, index=varpre.index[-nobs:], columns=varpig.columns+'pre')# 
+# df.adftest(varpig_d)
+# varpig.to_csv("varpig5.csv")
+
+irf = model_fit.irf(periods=8, var_decomp=None, var_order=None)
+# irf.cum_effect_cov()
+irf.plot(orth=False)
+####
+# irf.plot_cum_effects(orth=False)
+# fevd = model_fit.fevd(5)
+# fevd.summary()
+# model_fit.fevd(20).plot()
+# nor=model_fit.test_normality()
+# nor.plot()
+
+# varpig_d = varpig.diff().dropna()
+# model=VAR(varpig_d,exog=exog)
+exog=train_pig[["pf/rp","vol2",'taiwanpig']]
+model=VAR(varpig,exog=exog)
+model= VARResults(endog=varpig, endog_lagged=4 ,trend='c',  exog=exog)
+VARResults(endog=varpig , endog_lagged =np.zeros_like(varpig) , params= np.zeros_like(varpig), sigma_u=np.zeros_like(varpig), lag_order=4) 
+model_fit=model.fit(4,method = 'ols', trend= 'c')
+model_fit.summary()
+lag_order=4
+forecast_input = varpig.values[-lag_order:]
+# forecast_input = varpig_d.values[-lag_order:]
+
+nobs=(len(vardf)-len(varpig))
+exog=pig1[["pf/rp","vol2","taiwanpig"]][-22:]
+fc = model_fit.forecast(y=forecast_input, steps=nobs,exog_future=exog)
+# df_forecast = pd.DataFrame(fc, index=val_pig.index[-nobs:], columns=varpig.columns)# + '_1d'
+# df_fc = df_forecast.copy()
+# columns = varpig.columns
+# for col in columns:    
+#     df_fc[str(col)] = varpig[col].iloc[-1] + df_fc[str(col)].cumsum()
+# fc=df_fc
+# for i in range(len(varpig.columns)):
+#     fc_series = pd.Series(fc.iloc[:,i], index=pig1[-nobs:].index)
+#     plt.figure(figsize=(12,5), dpi=100)
+#     fc2 =pd.Series(varpig.iloc[:,i])
+#     fc_series =pd.concat([fc2,fc_series],axis=0)
+#     plt.plot(vardf.iloc[:,i], label='actual',)
+#     plt.plot(fc_series ,label='forecast')
+#     plt.plot(varpig.iloc[:,i], label='training')
+
+#     plt.title(varpig.columns[i]+'Forecast vs Actuals')
+#     plt.legend(loc='upper left', fontsize=8)
+#     plt.show()
+
+
+for i in range(len(varpig.columns)):
+    fc_series = pd.Series(fc[:,i], index=pig1[-nobs:].index)
+    plt.figure(figsize=(12,5), dpi=100)
+    fc2 =pd.Series(varpig.iloc[:,i])
+    fc_series =pd.concat([fc2,fc_series],axis=0)
+    plt.plot(vardf.iloc[:,i], label='actual',)
+    plt.plot(fc_series ,label='forecast')
+    plt.plot(varpig.iloc[:,i], label='training')
+
+    plt.title(varpig.columns[i]+'Forecast vs Actuals')
+    plt.legend(loc='upper left', fontsize=8)
+    plt.show()
+print(model_fit.summary())
+df.dub(model_fit.resid)
+
+
+egg=df.egg
+egg1=egg[:"2021-05"]
+egg2=egg["2021-05":'2022-03']
+eggdf=egg.iloc[:,[0,1,2]]
+for i in  range(3):
+    eggdf.iloc[:,i]=np.log(eggdf.iloc[:,i])   
+   
+eggtrain=egg1.iloc[:,[0,1,2]]
+for i in  range(3):
+    eggtrain.iloc[:,i]=np.log(eggtrain.iloc[:,i])   
+   
+    
+
+eggpre=egg2.iloc[:,[0,1,2]]
+for i in  range(3):
+    eggpre.iloc[:,i]=np.log(eggpre.iloc[:,i])   
+   
+
+
+    
+exog=egg1["google trend_1"]
+model_fitted=VAR(eggtrain,exog=exog)
+model_fitted=model_fitted.fit(maxlags=3,method = 'ols', trend= 'c')
+model_fitted.summary()
+lag_order=3
+forecast_input = eggtrain.values[-lag_order:]
+# forecast_input = varpig_d.values[-lag_order:]
+
+nobs=(len(egg2))
+exog=egg2['google trend_1']
+fc = model_fitted.forecast(y=forecast_input, steps=nobs,exog_future=exog)
+
+for i in range(len(eggtrain.columns)):
+    fc_series = pd.Series(fc[:,i], index=egg2[-nobs:].index)
+    plt.figure(figsize=(12,5), dpi=100)
+    fc2 =pd.Series(eggtrain.iloc[:,i])
+    fc_series =pd.concat([fc2,fc_series],axis=0)
+    plt.plot(eggdf.iloc[:,i], label='actual',)
+    plt.plot(fc_series ,label='forecast')
+    plt.plot(eggtrain.iloc[:,i], label='training')
+
+    plt.title(egg.columns[i]+'Forecast vs Actuals')
+    plt.legend(loc='upper left', fontsize=8)
+    plt.show()
+# df.granger(varpig_d)
+# 
+# model_fitted=df.varmodel(varpig_d,6)
+# pre=df.forecast(6, varpig ,6, model_fitted)
+# df.dub(model_fitted.resid)
+# pre1=invert_transformation(varpig, pre, second_diff=False)        
+
+#結構性轉變檢定
+####################################################
+import statsmodels.api as sm 
+try1=vardf[:"2020-03"]
+try2=vardf["2020-04":]
+try1["dummy"]=0
+try2["dummy"]=1
+try3=pd.concat([try1,try2],axis=0)
+try3.reset_index(inplace=True)
+try3["time_idx"]=0
+         
+for i in range(len(try3)):
+    try3["time_idx"][i]=i
+try3.set_index("date",inplace=True)
+#### 結構性轉變檢定
+for i in range(5):
+    
+    y=try3.iloc[:,i]
+    x=try3.iloc[:,[5,6]]
+    x = sm.add_constant(x)
+    ols = sm.OLS(y,x)
+    results = ols.fit()
+    print(results.summary())  
+
+
+
+
+# # df.evaluate(vardf.columns,varpre,pre1.iloc[:,6:])
+
+
+# for col, val , pe in zip(vardf.columns,varpre,pre.iloc[:,:]):
+    
+#     rmse = mean_squared_error(varpre[col],pre.iloc[:,:][pe],squared=False )  
+   
+#     mse  = mean_squared_error(varpre[col],pre.iloc[:,:][pe])  
+    
+#     print(col, 'rmse:', round(rmse, 3))
+    
+#     print(col, 'mse:' , round(mse, 3))
+
+# #######取得殘差
+res=model_fit.resid
+# #######取得殘差
+# res=model_fitted.resid
+# #####正規化
+scaler=MinMaxScaler(feature_range=(0,1))
+
+
+
+
+
+# ###樣本擬和
+
+
+gdbt_param = {'n_estimators':list(range(30,100,10)),
+             'min_samples_split':list(range(2,5)),
+             'min_samples_leaf': list(range(2,5)),
+             'max_depth': list(range(2,5))
+             }  
+svm_param={'kernel':['rbf','linear','poly','sigmoid','precomputed'],
+           'degree':list(range(2,5)),
+           'C'     :list(range(1,10)),
+           'gamma' :['scale','auto' ]
+            
+           }
+
+
+# output(3,4,'svm')
+
+
+varpredict=model_fit.fittedvalues
+
+out,out1,out2=output(0,4,'rf')
+out,out1,out2=output(0,4,'svm')
+out,out1,out2=output(0,4,'gdbt')
+
+
+def output(num,length,mode):
+    df1=scaler.fit_transform(np.array(res.iloc[:,num]).reshape(-1,1))
+    x_svm,y_svm=create_dataset(df1,length)
+    # TRAIN_SPLIT=int(len(x_svm)*1)
+    x_train=x_svm[:]
+    y_train=y_svm[:]
+    # y_train,y_test=y_svm[:TRAIN_SPLIT],y_svm[TRAIN_SPLIT:]
+
+    # x_train,x_test=x_svm[:TRAIN_SPLIT],x_svm[TRAIN_SPLIT:]
+    # y_train,y_test=y_svm[:TRAIN_SPLIT],y_svm[TRAIN_SPLIT:]
+    if mode =="rf": 
+        gsrf= GridSearchCV(estimator =RandomForestRegressor(random_state=12), param_grid= gdbt_param,cv=10)  
+        gsrf.fit(x_train,y_train)  
+        rfpre=gsrf.predict(x_train) 
+        print(gsrf.best_params_, gsrf.best_score_) 
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(rfpre,color='red', label='Prediction')
+        plt.plot(y_train,color='blue', label='Answer')
+        plt.legend(loc='best')
+        plt.show()
+       
+        rf_pre=[]
+        first_eval_batch = y_train[-length:]
+        current_batch =first_eval_batch.reshape(1,-1) 
+        for i in range(22):
+            current_pred= gsrf.predict(current_batch)
+            rf_pre.append(current_pred)
+            current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+        
+        rfpre=scaler.inverse_transform(rf_pre)
+        fc_series = pd.Series(fc[:,num], index=pig[-nobs:].index)
+        fc_series0=fc_series +rfpre.reshape(-1)
+        plt.figure(figsize=(12,5), dpi=100)
+        fc2 =pd.Series(varpig.iloc[:,num]) ##訓練資料
+        fc_series =pd.concat([fc2,fc_series0],axis=0)
+        plt.plot(vardf.iloc[:,num], label='actual',)
+        plt.plot(fc_series ,label='forecast')
+        plt.plot(varpig.iloc[:,num], label='training')
+        plt.title("rf"+varpig.columns[num]+'Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show()
+        out,out1=plotdif(num,gsrf,"rf",x_train,y_train)
+        out2 =pd.DataFrame(columns=["true","pre"])
+        out2['true'] = vardf.iloc[63:,num]
+        out2['pre'] = fc_series0
+        return out,out1,out2
+    if mode =="svm":
+        gssvm= GridSearchCV(estimator =SVR(), param_grid= svm_param,cv=10)  
+        gssvm.fit(x_train,y_train)
+        print(gssvm.best_params_, gssvm.best_score_) 
+        svmpre=gssvm.predict(x_train) 
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(svmpre,color='red', label='Prediction')
+        plt.plot(y_train,color='blue', label='Answer')
+        plt.legend(loc='best')
+        plt.show()
+       
+        svm_pre=[]
+        first_eval_batch = y_train[-4:]
+        current_batch =first_eval_batch.reshape(1,-1) 
+        for i in range(22):
+            current_pred= gssvm.predict(current_batch)
+            svm_pre.append(current_pred)
+            current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+
+
+        svmpre=scaler.inverse_transform(svm_pre)
+        fc_series = pd.Series(fc[:,num], index=pig[-22:].index)
+        fc_series0=fc_series +svmpre.reshape(-1)
+        plt.figure(figsize=(12,5), dpi=100)
+        fc2 =pd.Series(varpig.iloc[:,num]) ##訓練資料
+        fc_series =pd.concat([fc2,fc_series0],axis=0)
+        plt.plot(vardf.iloc[:,num], label='actual',)
+        plt.plot(fc_series ,label='forecast')
+        plt.plot(varpig.iloc[:,num], label='training')
+        plt.title("svm"+varpig.columns[num]+'Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show()
+        out,out1 =  plotdif(num,gssvm,"svm",x_train,y_train)
+        out2 =pd.DataFrame(columns=["true","pre"])
+        out2['true'] = vardf.iloc[63:,num]
+        out2['pre'] = fc_series0
+    
+
+        return out,out1,out2
+
+    if mode == "gdbt":      
+        gsgdbt= GridSearchCV(estimator = GradientBoostingRegressor(learning_rate=0.1,
+        random_state=42), param_grid= gdbt_param,cv=10)  
+        gsgdbt.fit(x_train,y_train)          
+        print(gsgdbt.best_params_, gsgdbt.best_score_) 
+        gdbtpre=gsgdbt.predict(x_train) 
+        plt.figure(figsize=(12,5), dpi=100)
+        plt.plot(gdbtpre,color='red', label='Prediction')
+        plt.plot(y_train,color='blue', label='Answer')
+        plt.legend(loc='best')
+        plt.show()
+     
+        gbdt_pre=[]
+        first_eval_batch = y_train[-4:]
+        current_batch =first_eval_batch.reshape(1,-1) 
+        for i in range(22):
+            current_pred= gsgdbt.predict(current_batch)
+            gbdt_pre.append(current_pred)
+            current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+        
+        # output=pd.DataFrame(columns=["true","pre"])
+        # output['true'] = y_train
+        # output['pre'] = rfpre
+
+        gbdtpre=scaler.inverse_transform(gbdt_pre)
+        fc_series = pd.Series(fc[:,num], index=pig[-22:].index)
+        fc_series0=fc_series +gbdtpre.reshape(-1)
+        plt.figure(figsize=(12,5), dpi=100)
+        fc2 =pd.Series(varpig.iloc[:,num]) ##訓練資料
+        fc_series =pd.concat([fc2,fc_series0],axis=0)
+        plt.plot(vardf.iloc[:,num], label='actual',)
+        plt.plot(fc_series ,label='forecast')
+        plt.plot(varpig.iloc[:,num], label='training')
+        plt.title('gdbt'+varpig.columns[num]+'Forecast vs Actuals')
+        plt.legend(loc='upper left', fontsize=8)
+        plt.show()
+        out,out1 = plotdif(num,gsgdbt,"gdbt",x_train,y_train)
+        out2 =pd.DataFrame(columns=["true","pre"])
+        out2['true'] = vardf.iloc[63:,num]
+        out2['pre'] = fc_series
+    
+
+        return out,out1,out2
+
+
+# plotdif(1,gsgdbt,"gdbt")
+
+def plotdif(num,function,mode,x_train,y_train):
+    plt.figure(facecolor='white')
+    pd.Series(varpredict.iloc[:,num]).plot(color='blue', label='Predict')
+    pd.Series(varpig.iloc[4:,num]).plot(color='red', label='Original')
+    plt.legend(loc='best')
+    plt.title(['RMSE: %.4f'% root_mean_squared_error(varpig.iloc[4:,num], varpredict.iloc[:,num])
+    ,'Mape: %.4f'% mape(varpig.iloc[4:,num], varpredict.iloc[:,num])])
+    
+    plt.show()
+    output=pd.DataFrame(columns=["true","pre"])
+    output['true'] = varpredict.iloc[:,num]
+    output['pre'] = varpig.iloc[4:,num]
+    if mode == "rf":
+       
+       
+        rfpre = function.predict(x_train)
+        rfpre=scaler.inverse_transform(rfpre.reshape(-1,1))
+        prevar =varpredict.iloc[-len(x_train):,num]
+        rfpre=pd.Series(rfpre.reshape(-1),index=prevar.index)
+        preml  =( prevar + rfpre)
+        plt.figure(facecolor='white')
+    
+        pd.Series(preml).plot(color='blue', label='Predict')
+        pd.Series(varpig.iloc[-len(x_train):,num]).plot(color='red', label='Original')
+        plt.title(['RMSE: %.4f'% root_mean_squared_error(varpig.iloc[-len(y_train):,num], preml)
+                  ,'Mape: %.4f'% mape(varpig.iloc[-len(y_train):,num], preml)])
+        output1=pd.DataFrame(columns=["true","pre"])
+        output1['true'] = varpredict.iloc[:,num]
+        output1['pre'] = preml
+    
+        plt.show()
+        return output, output1
+    ##############################################3
+    if mode == "gdbt":
+        
+ 
+        gdbtpre = function.predict(x_train)
+        gdbtpre=scaler.inverse_transform(gdbtpre.reshape(-1,1))
+        prevar =varpredict.iloc[-len(x_train):,num]
+        gdbtpre=pd.Series(gdbtpre.reshape(-1),index=prevar.index)
+        preml  =( prevar + gdbtpre)
+        plt.figure(facecolor='white')
+    
+        pd.Series(preml).plot(color='blue', label='Predict')
+        pd.Series(varpig.iloc[-len(x_train):,num]).plot(color='red', label='Original')
+        plt.title(['RMSE: %.4f'% root_mean_squared_error(varpig.iloc[-len(y_train):,num], preml)
+                  ,'Mape: %.4f'% mape(varpig.iloc[-len(y_train):,num], preml)])
+        
+        plt.show()
+        output1=pd.DataFrame(columns=["true","pre"])
+        output1['true'] = varpredict.iloc[:,num]
+        output1['pre'] = preml
+        return output,output1
+
+    #########################################svm
+    if mode == "svm"   :
+        svmpre = function.predict(x_train)
+        svmpre=scaler.inverse_transform(svmpre.reshape(-1,1))
+        prevar =varpredict.iloc[-len(x_train):,num]
+        svmpre=pd.Series(svmpre.reshape(-1),index=prevar.index)
+        preml  =( prevar + svmpre)
+        plt.figure(facecolor='white')
+    
+        pd.Series(preml).plot(color='blue', label='Predict')
+        pd.Series(varpig.iloc[-len(x_train):,num]).plot(color='red', label='Original')
+        plt.title(['RMSE: %.4f'% root_mean_squared_error(varpig.iloc[-len(y_train):,num], preml)
+                  ,'Mape: %.4f'% mape(varpig.iloc[-len(y_train):,num], preml)])
+    
+        plt.show()
+        output1=pd.DataFrame(columns=["true","pre"])
+        output1['true'] = varpredict.iloc[:,num]
+        output1['pre'] = preml
+    
+        return output,output1 
+
+import time
+outputlist=['svm','gdbt','rf']
+for i in outputlist:
+    print(i)
+    for j in  range(5):
+        output(j,4,i)
+        time.sleep(5)
+
+
+
+output(4,4,'svm')
+
+
+
+# model = [gssvm,gsgdbt,gsrf]
+
+evaluate={}
+a=[list(range(0,len(x_train)-3)),list(range(0,len(x_train)-6)),list(range(0,len(x_train)-9)),list(range(0,len(x_train)-12))]
+rescorn=res.iloc[:,0]
+def getfunction(res,number):
+    for i in a:
+        
+        # if len(i) == "50":
+        scaler=MinMaxScaler(feature_range=(0,1))
+        df1=scaler.fit_transform(np.array(rescorn).reshape(-1,1))
+        x,y=create_dataset(df1,number)
+        TRAIN_SPLIT=len(i)
+        x_train,x_test=x[:TRAIN_SPLIT],x[TRAIN_SPLIT:]
+        y_train,y_test=y[:TRAIN_SPLIT],y[TRAIN_SPLIT:]
+
+        gssvm= GridSearchCV(estimator =SVR(), param_grid= svm_param,cv=5)  
+        gssvm.fit(x_train,y_train)
+        svmpre=gssvm.predict(x_test)
+        svmmse=mean_squared_error(y_test,svmpre)
+        evaluate["svmmse"+str(len(x_test))] = mean_squared_error(y_test,svmpre)    
+        
+        gsrf= GridSearchCV(estimator =RandomForestRegressor(random_state=42), param_grid= gdbt_param,cv=5)  
+        gsrf.fit(x_train,y_train)    
+        rfpre=gsrf.predict(x_test)
+        rfmse =mean_squared_error(y_test,rfpre)
+        evaluate["rfmse"+str(len(x_test))] = mean_squared_error(y_test,rfpre)    
+
+        gsgdbt= GridSearchCV(estimator = GradientBoostingRegressor(learning_rate=0.1, random_state=42), param_grid= gdbt_param,cv=5)  
+        gsgdbt.fit(x_train,y_train)  
+        gspre=gsgdbt.predict(x_test)
+        evaluate["gbdtmse"+str(len(x_test))] = mean_squared_error(y_test,gspre)    
+
+        svm_pre=[]
+        first_eval_batch = y_train[-number:]
+        current_batch =first_eval_batch.reshape(1,-1) 
+        
+        for i in range(len(x_test)):
+            current_pred= gssvm.predict(current_batch)
+            svm_pre.append(current_pred)
+            current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+        evaluate["svm1mse"+str(len(x_test))] = mean_squared_error(y_test,svm_pre)    
+
+    
+        rf_pre=[]
+        first_eval_batch = y_train[-number:]
+        current_batch =first_eval_batch.reshape(1,-1) 
+        for i in range(len(x_test)):
+            current_pred= gsrf.predict(current_batch)
+            rf_pre.append(current_pred)
+            current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+        evaluate["rf1mse"+str(len(x_test))] = mean_squared_error(y_test,rf_pre)    
+
+        gbdt_pre=[]
+        first_eval_batch = y_train[-number:]
+        current_batch =first_eval_batch.reshape(1,-1) 
+        for i in range(len(x_test)):
+            current_pred= gsgdbt.predict(current_batch)
+            gbdt_pre.append(current_pred)
+            current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+        evaluate["gdbt1mse"+str(len(x_test))] = mean_squared_error(y_test,gbdt_pre)    
+       
+      
+# =============================================================================
+
+getfunction(res.iloc[:,0],4)
+# =============================================================================
+
+
+### GET ROLLING
+scaler=MinMaxScaler(feature_range=(0,1))
+
+for i in range(len(res.columns)):
+    globals()["scaler"+str(i)]=MinMaxScaler(feature_range=(0,1))
+    df1 =  globals()["scaler"+str(i)].fit_transform(np.array(res.iloc[:,i]).reshape(-1,1))
+    globals()["x_"+str(res.columns[i])], globals()["y_"+str(res.columns[i])]=create_dataset(df1,4)
+    
+
+#################3
+for i in res:
+   
+    globals()['gsgdbt'+str(i)]= GridSearchCV(estimator = GradientBoostingRegressor(learning_rate=0.1, random_state=42), 
+                         param_grid= gdbt_param,cv=10)  
+    globals()['gsgdbt'+str(i)].fit(globals()['x_'+str(i)],globals()['y_'+str(i)])
+    print( globals()['gsgdbt'+str(i)].best_params_,globals()['gsgdbt'+str(i)].best_score_) 
+
+
+    
+
+
+# pre1=[]
+# first_eval_batch = y_corn[-4:]
+# current_batch =first_eval_batch.reshape(1,-1) 
+# for i in range(22):
+#     current_pred= gsgdbtcorn.predict(current_batch)
+#     pre1.append(current_pred)
+#     current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+# pre1=scaler1.inverse_transform(pre1)
+
+# pre2=[]
+# first_eval_batch = y_soy[-4:]
+# current_batch =first_eval_batch.reshape(1,-1) 
+# for i in range(22):
+#     current_pred= gsgdbtsoy.predict(current_batch)
+#     pre2.append(current_pred)
+#     current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+# pre2=scaler2.inverse_transform(pre2)
+# pre3=[]
+# first_eval_batch = y_mix[-4:]
+# current_batch =first_eval_batch.reshape(1,-1) 
+# for i in range(22):
+#     current_pred= gsgdbtmix.predict(current_batch)
+#     pre3.append(current_pred)
+#     current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+# pre3=scaler1.inverse_transform(pre3)
+# pre4=[]
+# first_eval_batch = y_rgpig[-4:]
+# current_batch =first_eval_batch.reshape(1,-1) 
+# for i in range(22):
+#     current_pred= gsgdbtrgpig.predict(current_batch)
+#     pre4.append(current_pred)
+#     current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+# pre4=scaler1.inverse_transform(pre4)
+# pre5=[]
+# first_eval_batch = y_repig[-4:]
+# current_batch =first_eval_batch.reshape(1,-1) 
+# for i in range(22):
+#     current_pred= gsgdbtrepig.predict(current_batch)
+#     pre5.append(current_pred)
+#     current_batch = np.append(current_batch[:,1:],[current_pred],axis=1)
+# pre5=scaler1.inverse_transform(pre5)
+
+
+# forecast_input = varpig.values[-4:]
+# output=[]
+# exog.reset_index(drop=True,inplace=True)
+# for i in range(22):
+#     fc = model_fit.forecast(y=forecast_input, steps=1,exog_future=exog.iloc[i,:].to_numpy().reshape(1,-1))
+#     fc[0][0] =fc[0][0]+pre1[i]
+#     fc[0][1] =fc[0][1]+pre2[i]
+#     fc[0][2] =fc[0][2]+pre3[i]
+#     fc[0][3] =fc[0][3]+pre4[i]
+#     fc[0][4] =fc[0][4]+pre5[i]
+#     fc=pd.DataFrame(fc)
+#     output.append(fc)
+#     forecast_input =  np.append(forecast_input[1:,:],fc,axis=0)
+
+
+output= pd.concat(output,axis=0)
+output.reset_index(drop=True,inplace=True)
+
+# fc_series = pd.Series(output.iloc[:,0].values, index=pig[-22:].index)
+
+for i in range(len(varpig.columns)):
+   fc_series = pd.Series(output.iloc[:,i].values, index=vardf[-22:].index)
+   plt.figure(figsize=(12,5), dpi=100)
+   plt.plot(varpig.iloc[:,i], label='training')
+   plt.plot(vardf.iloc[-22:,i], label='actual')
+   plt.plot(fc_series,label='forecast')
+
+   plt.title(varpig.columns[i]+'Forecast vs Actuals')
+   plt.legend(loc='upper left', fontsize=8)
+   plt.show()
+
+#corn granger  small rppig
+# soy corn   rppig 
+# small corn  rppig 
+#rppig corn soy 
+#repig corn soy 
+def multivariate_data(dataset, target, start_index, end_index, history_size,
+                      target_size, single_step=False):
+  data = []
+  labels = []
+  
+  start_index = start_index + history_size
+  if end_index is None:
+    end_index = len(dataset) - target_size
+  
+  for i in range(start_index, end_index):
+    indices = range(i-history_size, i)
+    data.append(dataset[indices])
+    
+    if single_step:
+      labels.append(target[i+target_size])
+    else:
+      labels.append(target[i:i+target_size])
+  
+  return np.array(data), np.array(labels)
+#corn granger  small rppig
+# soy corn   rppig 
+# small corn  rppig 
+#rppig corn soy 
+#repig corn soy 
+xfactor=["small","rgpig"]
+y=vardf['corn']
+def gangerml(xfactor,yfactor,num):
+    
+    
+    x = vardf[xfactor]
+    y = vardf[yfactor]
+
+    scaler=MinMaxScaler(feature_range=(0,1))
+    y=scaler.fit_transform(y.to_frame())
+    scaler1=MinMaxScaler(feature_range=(0,1))
+    x=scaler1.fit_transform(x)
+    
+    
+    
+    x_x,y_y=multivariate_data( x ,y , 0 ,None, 4 , 0 ,single_step=True)
+    
+    x_train=x_x[:59]
+    y_train=y_y[:59]
+    x_test=x_x[59:]
+    y_test=y_y[59:]
+    
+    combined = list(zip(x_train ,y_train ))
+    # random.shuffle(combined)
+    shuffled_batch_features, shuffled_batch_y = zip(*combined)
+    # print(len(x))
+    all_Training_Instances=[]
+    
+    
+    
+    for i in range(0,len(shuffled_batch_features)):
+        hold=[]
+        # temp=[]
+        for j in range(9):
+          #print(len(hold))
+          
+           if j==4:
+               for k in range(4):
+                   hold=np.concatenate((hold, shuffled_batch_features[i][k][1]), axis=None)
+                   # if k == 3:
+                       # hold=np.concatenate((hold, shuffled_batch_y[i]), axis=None)
+    
+              
+           elif j < 4  :
+               hold=np.concatenate((hold, shuffled_batch_features[i][j][0]), axis=None)
+    
+        #print(len(hold))
+        all_Training_Instances.append(hold)
+        
+    
+    all_Training_Instances=np.reshape(all_Training_Instances, (len(all_Training_Instances),len(all_Training_Instances[0])))
+    
+    
+    combined = list(zip(x_test ,y_test ))
+    # random.shuffle(combined)
+    shuffled_batch_features_test, shuffled_batch_y_test = zip(*combined)
+    
+    all_Test_Instances=[]
+    
+    for i in range(0,len(x_test)):
+        hold=[]
+        # temp=[]
+        for j in range(5):
+          #print(len(hold))
+          
+           if j==4:
+               for k in range(4):
+                   hold=np.concatenate((hold, shuffled_batch_features_test[i][k][1]), axis=None)
+                   # if k == 3:
+                       # hold=np.concatenate((hold, shuffled_batch_y[i]), axis=None)
+    
+              
+           elif j < 4  :
+               hold=np.concatenate((hold, shuffled_batch_features_test[i][j][0]), axis=None)
+    
+        #print(len(hold))
+        all_Test_Instances.append(hold)
+        
+    
+    all_Test_Instances=np.reshape(all_Test_Instances, (len(all_Test_Instances),len(all_Test_Instances[0])))
+    
+    gsgdbt= GridSearchCV(estimator = GradientBoostingRegressor(learning_rate=0.1, random_state=42), param_grid= gdbt_param,cv=5)  
+    gsgdbt.fit(all_Training_Instances,shuffled_batch_y )
+    true=gsgdbt.predict(all_Training_Instances)
+    y=scaler.inverse_transform(true.reshape(-1,1))
+    
+    plt.figure(facecolor='white')
+    pd.Series(y.reshape(-1),index=varpig.iloc[4:,num].index).plot(color='blue', label='Predict')
+    pd.Series(varpig.iloc[4:,num]).plot(color='red', label='Original')
+    plt.legend(loc='best')
+    plt.title(["gdbt",'RMSE: %.4f'% root_mean_squared_error(varpig.iloc[4:,num], y.reshape(-1))
+    ,'Mape: %.4f'% mape(varpig.iloc[4:,num],y.reshape(-1))])
+    
+    plt.show()
+    
+    true1=gsgdbt.predict(all_Test_Instances)
+    ypre=scaler.inverse_transform(true1.reshape(-1,1))
+    
+    plt.figure(facecolor='white')
+    pd.Series(ypre.reshape(-1),index=vardf.iloc[63:,num].index).plot(color='blue', label='Predict')
+    pd.Series(vardf.iloc[63:,num]).plot(color='red', label='Original')
+    plt.legend(loc='best')
+    plt.title("gdbt predict")
+    plt.show()
+    
+    #####################################################svm
+    
+    combined = list(zip(x_train ,y_train ))
+    # random.shuffle(combined)
+    shuffled_batch_features, shuffled_batch_y = zip(*combined)
+    # print(len(x))
+    all_Training_Instances=[]
+    
+    
+    
+    for i in range(0,len(shuffled_batch_features)):
+        hold=[]
+        # temp=[]
+        for j in range(9):
+          #print(len(hold))
+          
+           if j==4:
+               for k in range(4):
+                   hold=np.concatenate((hold, shuffled_batch_features[i][k][1]), axis=None)
+                   # if k == 3:
+                       # hold=np.concatenate((hold, shuffled_batch_y[i]), axis=None)
+    
+              
+           elif j < 4  :
+               hold=np.concatenate((hold, shuffled_batch_features[i][j][0]), axis=None)
+    
+        #print(len(hold))
+        all_Training_Instances.append(hold)
+        
+    
+    all_Training_Instances=np.reshape(all_Training_Instances, (len(all_Training_Instances),len(all_Training_Instances[0])))
+    
+    
+    combined = list(zip(x_test ,y_test ))
+    # random.shuffle(combined)
+    shuffled_batch_features_test, shuffled_batch_y_test = zip(*combined)
+    
+    all_Test_Instances=[]
+    
+    for i in range(0,len(x_test)):
+        hold=[]
+        # temp=[]
+        for j in range(5):
+          #print(len(hold))
+          
+           if j==4:
+               for k in range(4):
+                   hold=np.concatenate((hold, shuffled_batch_features_test[i][k][1]), axis=None)
+                   # if k == 3:
+                       # hold=np.concatenate((hold, shuffled_batch_y[i]), axis=None)
+    
+              
+           elif j < 4  :
+               hold=np.concatenate((hold, shuffled_batch_features_test[i][j][0]), axis=None)
+    
+        #print(len(hold))
+        all_Test_Instances.append(hold)
+        
+    
+    all_Test_Instances=np.reshape(all_Test_Instances, (len(all_Test_Instances),len(all_Test_Instances[0])))
+    
+    gssvm= GridSearchCV(estimator =SVR(), param_grid= svm_param,cv=5)  
+    gssvm.fit(all_Training_Instances,shuffled_batch_y )
+    true=gssvm.predict(all_Training_Instances)
+    y=scaler.inverse_transform(true.reshape(-1,1))
+    
+    plt.figure(facecolor='white')
+    pd.Series(y.reshape(-1),index=varpig.iloc[4:,num].index).plot(color='blue', label='Predict')
+    pd.Series(varpig.iloc[4:,num]).plot(color='red', label='Original')
+    plt.legend(loc='best')
+    plt.title(['svm','RMSE: %.4f'% root_mean_squared_error(varpig.iloc[4:,num], y.reshape(-1))
+    ,'Mape: %.4f'% mape(varpig.iloc[4:,num],y.reshape(-1))])
+    
+    plt.show()
+    
+    true1=gssvm.predict(all_Test_Instances)
+    ypre=scaler.inverse_transform(true1.reshape(-1,1))
+    
+    plt.figure(facecolor='white')
+    pd.Series(ypre.reshape(-1),index=vardf.iloc[63:,num].index).plot(color='blue', label='Predict')
+    pd.Series(vardf.iloc[63:,num]).plot(color='red', label='Original')
+    plt.legend(loc='best')
+    plt.title("svm predict")
+    
+    plt.show()
+    ####################################################################3
+    combined = list(zip(x_train ,y_train ))
+    # random.shuffle(combined)
+    shuffled_batch_features, shuffled_batch_y = zip(*combined)
+    # print(len(x))
+    all_Training_Instances=[]
+    
+    
+    
+    for i in range(0,len(shuffled_batch_features)):
+        hold=[]
+        # temp=[]
+        for j in range(9):
+          #print(len(hold))
+          
+           if j==4:
+               for k in range(4):
+                   hold=np.concatenate((hold, shuffled_batch_features[i][k][1]), axis=None)
+                   # if k == 3:
+                       # hold=np.concatenate((hold, shuffled_batch_y[i]), axis=None)
+    
+              
+           elif j < 4  :
+               hold=np.concatenate((hold, shuffled_batch_features[i][j][0]), axis=None)
+    
+        #print(len(hold))
+        all_Training_Instances.append(hold)
+        
+    
+    all_Training_Instances=np.reshape(all_Training_Instances, (len(all_Training_Instances),len(all_Training_Instances[0])))
+    
+    
+    combined = list(zip(x_test ,y_test ))
+    # random.shuffle(combined)
+    shuffled_batch_features_test, shuffled_batch_y_test = zip(*combined)
+    
+    all_Test_Instances=[]
+    
+    for i in range(0,len(x_test)):
+        hold=[]
+        # temp=[]
+        for j in range(5):
+          #print(len(hold))
+          
+           if j==4:
+               for k in range(4):
+                   hold=np.concatenate((hold, shuffled_batch_features_test[i][k][1]), axis=None)
+                   # if k == 3:
+                       # hold=np.concatenate((hold, shuffled_batch_y[i]), axis=None)
+    
+              
+           elif j < 4  :
+               hold=np.concatenate((hold, shuffled_batch_features_test[i][j][0]), axis=None)
+    
+        #print(len(hold))
+        all_Test_Instances.append(hold)
+        
+    
+    all_Test_Instances=np.reshape(all_Test_Instances, (len(all_Test_Instances),len(all_Test_Instances[0])))
+    
+    gsrf= GridSearchCV(estimator =RandomForestRegressor(random_state=42), param_grid= gdbt_param,cv=5)  
+    gsrf.fit(all_Training_Instances,shuffled_batch_y )
+    true=gsrf.predict(all_Training_Instances)
+    y=scaler.inverse_transform(true.reshape(-1,1))
+    
+    plt.figure(facecolor='white')
+    pd.Series(y.reshape(-1),index=varpig.iloc[4:,num].index).plot(color='blue', label='Predict')
+    pd.Series(varpig.iloc[4:,num]).plot(color='red', label='Original')
+    plt.legend(loc='best')
+    plt.title(['rf','RMSE: %.4f'% root_mean_squared_error(varpig.iloc[4:,num], y.reshape(-1))
+    ,'Mape: %.4f'% mape(varpig.iloc[4:,num],y.reshape(-1))])
+    
+    plt.show()
+    
+    true1=gsrf.predict(all_Test_Instances)
+    ypre=scaler.inverse_transform(true1.reshape(-1,1))
+    
+    plt.figure(facecolor='white')
+    pd.Series(ypre.reshape(-1),index=vardf.iloc[63:,num].index).plot(color='blue', label='Predict')
+    pd.Series(vardf.iloc[63:,num]).plot(color='red', label='Original')
+    plt.legend(loc='best')
+    plt.title("rf predict")
+    
+    plt.show()
+#corn granger  small rppig
+#soy   corn   rppig 
+#corn  rppig 
+#rppig corn soy 
+#repig corn soy    
+gangerml(["small","rgpig"],"corn",0)
+gangerml(["corn","rgpig"],"soy",1)
+gangerml(["corn","rgpig"],"small",2)
+gangerml(["corn","soy"],"rgpig",3)
+gangerml(["corn","soy"],"repig",4)
+
+
