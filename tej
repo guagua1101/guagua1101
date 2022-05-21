@@ -1,0 +1,1319 @@
+import numpy as np
+import pandas as pd
+from datetime import timedelta
+from dateutil.relativedelta import relativedelta
+from datetime import date, timedelta
+import matplotlib.pyplot as plt
+import seaborn as sns
+import psycopg2
+import tejapi
+
+
+
+tejapi.ApiConfig.api_key="qsZobNV266GallOhcHev64GMP5B1Gx"###yourkey
+start ="2021-05-30"
+end ="2021-6-1"
+data = tejapi.get('TWN/AFACTO1D',
+mdate={'gt':start,'lt':end},
+paginate=True,
+chinese_column_name=True
+)
+columns= data.columns
+
+
+
+db_global = psycopg2.connect(dbname="global", user="2021112901", password="12345678", host="10.10.10.231",
+port="5432")
+db_twnprc = psycopg2.connect(dbname="twn_prc", user="2021112901", password="12345678", host="10.10.10.237",
+port="5432")
+db_fin = psycopg2.connect(dbname="twn", user="2021112901", password="12345678", host="10.10.10.232",
+port="5432")
+# a=pd.read_sql_query(
+# '''
+# select *
+# from fin.fin_finmini as a left join stk.attr_event as b on a.tej_comp_id=b.tej_comp_id
+# where stk_id='2897' and fin_type='M' and acc_code='0010A'
+# ''',
+# con=db_fin)
+
+
+
+ # globals()['invest'+str(i)] = pd.read_sql_query(code, con=db_fin)
+
+
+
+###短期反轉
+sh_roi = pd.read_sql_query(
+'''
+select stk_id, zyymm, roi
+from prc.stock_proimm JOIN stk.attr_event on stk.attr_event.tej_fp_id=stock_proimm.tej_fp_id
+Where stk.attr_event.STK_TYPE='1' and zyymm >= '2018-01-01'
+''',
+con=db_twnprc)
+
+
+
+sh_roi = sh_roi.rename(columns= {'roi':'短期反轉%', 'zyymm':'日期', 'stk_id':'證券代碼'})
+sh_roi.set_index("證券代碼",inplace=True)
+sh_roi = sh_roi.sort_values(by = '日期')
+sh_roi['日期']=pd.to_datetime(sh_roi['日期'])
+sh_roi["month"]= sh_roi["日期"].dt.month
+sh_roi["year"]= sh_roi['日期'].dt.year
+
+
+
+
+
+
+invest_factor = pd.DataFrame()
+# or fin_aq='A')
+for i in range(2010, 2021+1):
+
+code = '''
+SELECT fin.fin_finmini.tej_comp_id, fin_end_yymm, acc_val_k, semester ,stk_id,fin_type,fin_aq
+FROM fin.fin_finmini JOIN stk.attr_event on stk.attr_event.tej_comp_id=fin.fin_finmini.tej_comp_id
+WHERE stk.attr_event.STK_TYPE='1' and ( fin_type='M' or fin_aq='A')and acc_code='0010A' and fin_end_yymm >= '%s0301' and fin_end_yymm < '%s0901'
+''' % (i, i)
+
+#### fin_type='M' 為主 如果沒有就補 A
+invest = pd.read_sql_query(code, con=db_fin)
+
+invest = invest.set_index('fin_end_yymm')
+invest = invest.sort_values(by = ['stk_id', 'semester'])
+
+mode = {}
+for j in list(invest['stk_id'].unique()):
+each = invest[invest['stk_id'] == j]
+if len(each) == 2:
+value = each['acc_val_k'].pct_change().iloc[1]
+mode.setdefault(j, value)
+if len(each) == 4:
+each=each[each["fin_type"]=='M']
+value = each['acc_val_k'].pct_change().iloc[1]
+mode.setdefault(j, value)
+final = pd.DataFrame(mode.values(), index = mode.keys(), columns = ["inv"+str(i)])
+final = final.sort_values(by = final.columns[0], ascending = False)
+invest_factor = pd.concat([invest_factor, final], axis = 1)
+
+invest_factor
+
+
+
+
+
+
+
+profit_factor = pd.DataFrame()
+
+
+
+for i in range(2010, 2021+1):
+
+
+
+ separate_season = pd.read_sql_query(
+'''
+
+SELECT fin_end_yymm, m_acc_val_k, semester ,stk_id ,fin_type,fin_aq
+FROM fin.fin_finmini JOIN stk.attr_event on stk.attr_event.tej_comp_id=fin.fin_finmini.tej_comp_id
+WHERE stk.attr_event.STK_TYPE='1' and (fin_type='M' or fin_aq='A') and acc_code='3900' and fin_end_yymm >= '%s-06-01' and fin_end_yymm <= '%s-03-01'
+'''%(i-1, i),
+con=db_fin)
+profit = separate_season.set_index('fin_end_yymm')
+profit = profit.sort_values(by = ['stk_id', 'semester'])
+
+
+
+
+equity = pd.read_sql_query(
+'''
+SELECT acc_val_k ,stk_id ,fin_type,fin_aq
+FROM fin.fin_finmini JOIN stk.attr_event on stk.attr_event.tej_comp_id=fin.fin_finmini.tej_comp_id
+WHERE stk.attr_event.STK_TYPE='1' and (fin_type='M' or fin_aq='A') and acc_code='2000' and fin_end_yymm = '%s-03-01'
+'''%(i),
+con=db_fin)
+mode=[]
+equity = equity.rename(columns = {'acc_val_k':'前期權益總數'})
+for j in list(equity['stk_id'].unique()):
+each = equity[equity['stk_id'] == j]
+if len(each) == 1:
+value = each[['前期權益總數','stk_id']]
+mode.append(value,)
+if len(each) == 2:
+each=each[each["fin_type"]=='M']
+value = each[['前期權益總數','stk_id']]
+mode.append(value)
+mode=pd.concat(mode)
+
+
+
+
+mode1 = {}
+
+
+
+ for j in list(separate_season['stk_id'].unique()):
+each = separate_season[separate_season['stk_id'] == j]
+if len(each) == 4:
+value = each['m_acc_val_k'].sum()
+mode1.setdefault(j, value)
+if len(each) == 5:
+each=each[each["fin_type"]=='M']
+value = each['m_acc_val_k'].sum()
+mode1.setdefault(j, value)
+if len(each) == 8:
+each=each[each["fin_type"]=='M']
+value = each['m_acc_val_k'].sum()
+mode1.setdefault(j, value)
+
+
+
+ profit_pretax = pd.DataFrame(mode1.values(), index = mode1.keys(), columns = ['累計近四季稅前淨利'])
+profit_pretax = profit_pretax.sort_values(by = '累計近四季稅前淨利', ascending = False)
+
+
+profit_pretax = profit_pretax.reset_index().rename(columns = {'index':'stk_id'})
+profit_final = pd.merge(profit_pretax, mode, how='inner', on=['stk_id'])
+profit_final["eps"+str(i)] = profit_final['累計近四季稅前淨利'] / profit_final['前期權益總數']
+profit_final = profit_final.drop(columns = ['累計近四季稅前淨利','前期權益總數'])
+profit_final = profit_final.set_index('stk_id')
+profit_factor = pd.concat([profit_factor, profit_final], axis = 1)
+
+
+
+profit_factor
+# k=[]
+# for i in a:
+# num=len(i[1])
+# k.append(num)
+# df = pd.DataFrame (k, columns = ['num'])
+def long_term_revert(start, end):
+### PAST-12
+trade_date_12 = pd.read_sql_query( '''
+select zdate
+from stk.attr_stdodr
+where tradeday_cno !=0 and zdate >= '%s' and zdate <= '%s'
+'''%(date(int(str(start)[0:4]), int(str(start)[5:6]), int(str(start)[7:])) - relativedelta(months=12), end),
+con=db_twnprc)
+trade_date_12 = trade_date_12.sort_values(by = 'zdate', ascending = True).reset_index().drop(columns = 'index')
+
+
+
+ target_date_12 = trade_date_12.iloc[0]
+for i in range(1, len(trade_date_12)):
+if trade_date_12['zdate'].iloc[i].month != trade_date_12['zdate'].iloc[i-1].month:
+target_date_12 = pd.concat([target_date_12, trade_date_12.iloc[i]], axis = 0)
+target_date_12 = target_date_12.reset_index().drop(columns = ['index']).rename(columns = {0:'每月交易首日'})
+
+
+roi12 = pd.DataFrame()
+
+
+
+ for i in range(12, len(target_date_12)):
+past12 = pd.read_sql_query(
+'''
+select stk_id, zdate, roi , b.mkt
+from prc.stock_proip as a JOIN stk.attr_event as b on a.tej_fp_id=b.tej_fp_id
+Where b.STK_TYPE='1' and a.zdate = '%s' and a.prdid ='YP0001'
+'''%(target_date_12.iloc[i-12,0]),
+con=db_twnprc)
+
+
+
+ past12 = past12.rename(columns= {'roi':'12個月前年報酬率', 'zdate':'日期', 'stk_id':'證券代碼'})
+roi12 = pd.concat([roi12, past12], axis = 0)
+
+final_12 = pd.DataFrame()
+for i in range(len(list(roi12['日期'].unique()))):
+individual_date = roi12[roi12['日期'] == list(roi12['日期'].unique())[i]]
+individual_date['日期'] = target_date_12['每月交易首日'].iloc[i+12]
+final_12 = pd.concat([final_12, individual_date], axis = 0)
+
+
+
+
+
+### PAST-24
+trade_date_24 = pd.read_sql_query( '''
+select zdate
+from stk.attr_stdodr
+where tradeday_cno !=0 and zdate >= '%s' and zdate <= '%s'
+'''%(date(int(str(start)[0:4]), int(str(start)[5:6]), int(str(start)[7:])) - relativedelta(months=24), end),
+con=db_twnprc)
+trade_date_24 = trade_date_24.sort_values(by = 'zdate', ascending = True).reset_index().drop(columns = 'index')
+
+
+
+ target_date_24 = trade_date_24.iloc[0]
+for i in range(1, len(trade_date_24)):
+if trade_date_24['zdate'].iloc[i].month != trade_date_24['zdate'].iloc[i-1].month:
+target_date_24 = pd.concat([target_date_24, trade_date_24.iloc[i]], axis = 0)
+target_date_24 = target_date_24.reset_index().drop(columns = ['index']).rename(columns = {0:'每月交易首日'})
+
+
+roi24 = pd.DataFrame()
+
+
+
+ for i in range(24, len(target_date_24)):
+past24 = pd.read_sql_query(
+'''
+select stk_id, zdate, roi
+from prc.stock_proip JOIN stk.attr_event on stk.attr_event.tej_fp_id=stock_proip.tej_fp_id
+Where stk.attr_event.STK_TYPE='1' and zdate = '%s' and prdid ='YP0001'
+'''%(target_date_24.iloc[i-24,0]),
+con=db_twnprc)
+
+
+
+ past24 = past24.rename(columns= {'roi':'24個月前年報酬率', 'zdate':'日期', 'stk_id':'證券代碼'})
+roi24 = pd.concat([roi24, past24], axis = 0)
+
+final_24 = pd.DataFrame()
+for i in range(len(list(roi24['日期'].unique()))):
+individual_date = roi24[roi24['日期'] == list(roi24['日期'].unique())[i]]
+individual_date['日期'] = target_date_24['每月交易首日'].iloc[i+24]
+final_24 = pd.concat([final_24, individual_date], axis = 0)
+
+### PAST-36
+trade_date_36 = pd.read_sql_query( '''
+select zdate
+from stk.attr_stdodr
+where tradeday_cno !=0 and zdate >= '%s' and zdate <= '%s'
+'''%(date(int(str(start)[0:4]), int(str(start)[5:6]), int(str(start)[7:])) - relativedelta(months=36), end),
+con=db_twnprc)
+trade_date_36 = trade_date_36.sort_values(by = 'zdate', ascending = True).reset_index().drop(columns = 'index')
+
+
+
+ target_date_36 = trade_date_36.iloc[0]
+for i in range(1, len(trade_date_36)):
+if trade_date_36['zdate'].iloc[i].month != trade_date_36['zdate'].iloc[i-1].month:
+target_date_36 = pd.concat([target_date_36, trade_date_36.iloc[i]], axis = 0)
+target_date_36 = target_date_36.reset_index().drop(columns = ['index']).rename(columns = {0:'每月交易首日'})
+
+
+roi36 = pd.DataFrame()
+
+
+
+ for i in range(36, len(target_date_36)):
+past36 = pd.read_sql_query(
+'''
+select stk_id, zdate, roi
+from prc.stock_proip JOIN stk.attr_event on stk.attr_event.tej_fp_id=stock_proip.tej_fp_id
+Where stk.attr_event.STK_TYPE='1' and zdate = '%s' and prdid ='YP0001'
+'''%(target_date_36.iloc[i-36,0]),
+con=db_twnprc)
+
+
+
+ past36 = past36.rename(columns= {'roi':'36個月前年報酬率', 'zdate':'日期', 'stk_id':'證券代碼'})
+roi36 = pd.concat([roi36, past36], axis = 0)
+
+final_36 = pd.DataFrame()
+for i in range(len(list(roi36['日期'].unique()))):
+individual_date = roi36[roi36['日期'] == list(roi36['日期'].unique())[i]]
+individual_date['日期'] = target_date_36['每月交易首日'].iloc[i+36]
+final_36 = pd.concat([final_36, individual_date], axis = 0)
+
+
+# FINAL
+qusai_final = pd.merge(final_12, final_24, how='inner', on=['證券代碼','日期'])
+final = pd.merge(qusai_final, final_36, how='inner', on=['證券代碼','日期'])
+
+for i in [12,24,36]:
+final[str(i)+'個月前年報酬率'] = (0.01*final[str(i)+'個月前年報酬率'])+1
+
+final['13個月前近3年報酬'] = ((final['12個月前年報酬率'] * final['24個月前年報酬率'] * final['36個月前年報酬率']) - 1) * 100
+
+
+
+ return final
+
+
+
+long=long_term_revert(20200101,20211231)
+long.set_index("證券代碼",inplace=True)
+long['日期']=pd.to_datetime(long['日期'])
+
+
+
+long["month"]= long["日期"].dt.month
+long["year"]= long['日期'].dt.year
+lmomentum = list(long.groupby("日期"))
+def momentum(start, end):
+
+trade_date = pd.read_sql_query( '''
+select zdate
+from stk.attr_stdodr
+where tradeday_cno !=0 and zdate >= '%s' and zdate <= '%s'
+'''%(date(int(str(start)[0:4]), int(str(start)[5:6]), int(str(start)[7:])) - relativedelta(months=2), end),
+con=db_twnprc)
+trade_date = trade_date.sort_values(by = 'zdate', ascending = True).reset_index().drop(columns = 'index')
+
+
+
+ target_date = trade_date.iloc[0]
+for i in range(1, len(trade_date)):
+if trade_date['zdate'].iloc[i].month != trade_date['zdate'].iloc[i-1].month:
+target_date = pd.concat([target_date, trade_date.iloc[i]], axis = 0)
+target_date = target_date.reset_index().drop(columns = ['index']).rename(columns = {0:'每月交易首日'})
+
+
+momentum = pd.DataFrame()
+
+
+
+ for i in range(2, len(target_date)):
+past2 = pd.read_sql_query(
+'''
+select stk_id, zdate, roi ,b.mkt
+from prc.stock_proip as a JOIN stk.attr_event as b on a.tej_fp_id=b.tej_fp_id
+Where b.STK_TYPE='1' and a.zdate = '%s' and a.prdid ='YP0001'
+'''%(target_date.iloc[i-2,0]),
+con=db_twnprc)
+
+
+
+ past2 = past2.rename(columns= {'roi':'2個月前年報酬率', 'zdate':'日期', 'stk_id':'證券代碼'})
+momentum = pd.concat([momentum, past2], axis = 0)
+
+final = pd.DataFrame()
+for i in range(len(list(momentum['日期'].unique()))):
+individual_date = momentum[momentum['日期'] == list(momentum['日期'].unique())[i]]
+individual_date['日期'] = target_date['每月交易首日'].iloc[i+2]
+final = pd.concat([final, individual_date], axis = 0)
+
+
+
+ return final
+
+
+
+
+momentum=momentum(20200101,20201231)
+momentum.set_index("證券代碼",inplace=True)
+momentum['日期']=pd.to_datetime(momentum['日期'])
+
+
+
+momentum["month"]= momentum["日期"].dt.month
+momentum["year"]= momentum['日期'].dt.year
+mmomentum=list(momentum.groupby("日期"))
+sh_roi = pd.read_sql_query(
+'''
+select b.stk_id, a.zyymm, a.roi , b.mkt
+from prc.stock_proimm as a JOIN stk.attr_event as b on b.tej_fp_id=a.tej_fp_id
+Where b.STK_TYPE='1' and zyymm >= '2010-05-29'
+''',
+con=db_twnprc)
+
+
+
+sh_roi = sh_roi.rename(columns= {'roi':'短期反轉%', 'zyymm':'日期', 'stk_id':'證券代碼'})
+sh_roi = sh_roi.sort_values(by = '日期')
+sh_roi
+sh_roi.set_index("證券代碼",inplace=True)
+sh_roi['日期']=pd.to_datetime(sh_roi['日期'])
+
+
+
+sh_roi["month"]= sh_roi["日期"].dt.month
+sh_roi["year"]= sh_roi['日期'].dt.year
+
+
+
+
+rf = pd.read_sql_query(
+'''
+select zdate, fixed_rate
+from rate.rate_interest_twd
+Where tej_comp_id = 26181 and RATE_ID='TD01Y' and AMT_ID='00'
+and zdate >= '2010-05-31' and zdate <= '2022-05-31'
+''',
+con=db_global)
+
+
+
+rf = rf.rename(columns= {'fixed_rate':'一年定存', 'zdate':'日期'})
+
+
+
+mkt_roi = pd.read_sql_query(
+'''
+select zdate, roi
+from prc.index_proi JOIN stk.attr_event on stk.attr_event.tej_fp_id=index_proi.tej_fp_id
+Where zdate >= '2020-05-31' and zdate < '2022-05-31' and stk.attr_event.STK_ID='Y9997'
+''',
+con=db_twnprc)
+
+
+
+mkt_roi = mkt_roi.rename(columns= {'roi':'市場報酬%', 'zdate':'日期'})
+mkt_roi
+
+
+
+
+# 20205:
+mktrf = pd.merge(rf, mkt_roi, how='inner', on=['日期'])
+mktrf['MKTRF%'] = mktrf['市場報酬%'] - mktrf['一年定存']/365
+mktrf
+
+
+
+
+
+################################################ˇˇ
+dataframe = pd.read_sql_query(
+'''
+SELECT C.STK_ID,A.ZDATE,MKTCAP_K,ROI,D.PBR,C.MKT,B.ln_roi,D.tej_cdiv_yid,D.T2000, D.PEV , D.TEJ_PER2 ,D.sumoi_2
+
+
+
+FROM PRC.STOCK_PRC AS A LEFT JOIN PRC.STOCK_PROI AS B ON A.TEJ_FP_ID=B.TEJ_Fp_ID AND A.ZDATE=B.ZDATE
+
+LEFT JOIN STK.ATTR_EVENT AS C ON A.TEJ_FP_ID=C.TEJ_FP_ID
+
+
+
+LEFT JOIN prc.stock_fd AS D ON A.TEJ_FP_ID=D.TEJ_FP_ID AND A.ZDATE=D.ZDATE
+
+
+
+Where A.zdate >= '2010-05-20' and A.zdate < '2021-05-30' and C.stk_type= '1'
+''',
+con=db_twnprc)
+
+
+
+
+
+
+
+
+
+
+################### 將資料分成小大 主要是用市值來分 條件主要篩選 確保市值大於0
+def twosplit(df,condition,limit) :
+if limit :
+
+
+
+ df.sort_values(by=condition,ascending=True,inplace=True)
+small=df[condition].iloc[:int(len(df)*0.5)]
+big=df[condition].iloc[int(len(df)*0.5):]
+small=small.index
+big=big.index
+else :
+df=df[df[condition]>0]
+df.sort_values(by=condition,ascending=True,inplace=True)
+small=df[condition].iloc[:int(len(df)*0.5)]
+big=df[condition].iloc[int(len(df)*0.5):]
+small=small.index
+big=big.index
+
+
+return small ,big
+
+
+
+def marketpro(data):
+data.sort_values(by="mktcap_k",ascending=True,inplace=True)
+small=data.iloc[:int(len(data)*0.5)]
+big=data.iloc[int(len(data)*0.5):]
+small=small.index
+big=big.index
+return small ,big
+
+
+
+def splittwo(data,index):#用於二次切割 因原本已經分過一次組
+df=data.loc[index]
+df.sort_values(by="mktcap_k",ascending=True,inplace=True)
+small=df.iloc[:int(len(df)*0.5)]
+big=df.iloc[int(len(df)*0.5):]
+small=small.index
+big=big.index
+return small ,big
+#########
+#只有分組時計算數字
+def meanwithindex(data,index):
+df1=data.loc[index]
+
+df1["市值加權"] = df1['mktcap_k'].sum()
+df1["個股加權占比"] = df1['mktcap_k'] / df1["市值加權"]
+df1["個股投組報酬"] = df1["個股加權占比"]*df1["ln_roi"]
+out = df1["個股投組報酬"].sum()
+return out.round(4)
+
+
+
+ meanwithindex(df,eqsl)
+
+
+
+##使用市值比重為計算標準 ( )
+def mean1(df):
+df["市值加權"] = df['市值比重％'].sum()
+df["個股加權占比"] = df['市值比重％'] / df["市值加權"]
+df["個股投組報酬"] = df["個股加權占比"]*df["ln_roi"]
+out = df["個股投組報酬"].sum()
+return out.round(4)
+## 市值百萬元計算
+def mean(df):
+df["市值加權"] = df['mktcap_k'].sum()
+df["個股加權占比"] = df['mktcap_k'] / df["市值加權"]
+df["個股投組報酬"] = df["個股加權占比"]*df["ln_roi"]
+out = df["個股投組報酬"].sum()
+return out.round(4)
+
+
+
+def twotimestwo(df,condition) : ####得到投組
+l,h=twosplit(df,condition,limit=False)### 分成 低跟高 # 淨值比 數字越低 稱為高
+sl,bl=splittwo(df,l)#低本益比小投組 # 低本益比大投組 #
+sh,bh=splittwo(df,h)#高本益比小投組 # 高本益比大投組
+return sl,sh,bl,bh ###sh小高本益比 bh大高本益比 高本益比投組 sl bl 低本益比投組
+
+
+
+def twotimestwomean(df,sl ,sh, bl , bh ): ###小型溢酬
+sl = df.loc[sl]
+sh = df.loc[sh]
+bl = df.loc[bl]
+bh = df.loc[bh]
+sl = mean(sl) ## 小型 小condition
+sh = mean(sh) ## 小型
+bl = mean(bl)
+bh = mean(bh)
+answer=(1/2*(sh+bh)-1/2*(sl+bl))
+return answer.round(4)
+######分三組
+def splithree(df,condition ,limit=False):
+
+
+
+ if limit:
+df=df[df[condition]>0]
+df.sort_values(by=condition,ascending=True,inplace=True)
+low=df[condition].iloc[:int(len(df)*0.3)]
+medium=df[condition].iloc[int(len(df)*0.3):int(len(df)*0.7)]
+high=df[condition].iloc[int(len(df)*0.7):]
+low=low.index
+medium=medium.index
+high=high.index
+else:
+df.sort_values(by=condition,ascending=True,inplace=True)
+low=df[condition].iloc[:int(len(df)*0.3)]
+medium=df[condition].iloc[int(len(df)*0.3):int(len(df)*0.7)]
+high=df[condition].iloc[int(len(df)*0.7):]
+low=low.index
+medium=medium.index
+high=high.index
+return low ,medium ,high
+
+
+
+
+#############現金股利率
+####此function 獲得 1~30 ~31~70 ~71~100 個別分組報酬率
+def threetimestwomean(df,sl ,sm ,sh ,bl , bm , bh ):
+sl = df.loc[sl]
+sh = df.loc[sh]
+bl = df.loc[bl]
+bh = df.loc[bh]
+sm = df.loc[sm]
+bm = df.loc[bm]
+sl = mean(sl) ## 小型 小condition
+sm = mean(sm) ## 小型
+sh = mean(sh) ## 小型
+
+
+
+ bl = mean(bl)
+bm = mean(bm) ##
+bh = mean(bh)
+return sl , sm ,sh,bl , bm, bh
+def gettwo(df,small,high):
+small=df.loc[small]
+high=df.loc[high]
+small["加權報酬"]=small["mktcap_k"].sum()
+small["組合占比"]=small["mktcap_k"] / small["加權報酬"]
+smallreturn=(small["組合占比"]*small["ln_roi"]).sum()
+
+
+
+
+
+high["加權報酬"]=high["mktcap_k"].sum()
+high["組合占比"]=high["mktcap_k"] / high["加權報酬"]
+highreturn=(high["組合占比"]*high["ln_roi"]).sum()
+
+
+df["加權報酬"]=df["mktcap_k"].sum()
+df["組合占比"]=df["mktcap_k"] / df["加權報酬"]
+dfreturn=( df["組合占比"]*df["ln_roi"]).sum()
+pvreturn=(df["市值比重％"]*df["ln_roi"]).sum()*0.01
+
+
+
+ return smallreturn,highreturn
+
+
+
+##市場投組
+def pereturn(df):
+df=df[df["mktcap_k"]>0]
+
+
+
+ pv=df.sort_values(by="mktcap_k",ascending=True)
+low=pv["mktcap_k"].iloc[:int(len(pv)*0.5)]
+high=pv["mktcap_k"].iloc[int(len(pv)*0.5):]
+
+
+
+ low=pv.loc[low.index]
+low["加權報酬"]=low["mktcap_k"].sum()
+low["組合占比"]=low["mktcap_k"] / low["加權報酬"]
+lowreturn=(low["組合占比"]*low["roi"]).sum()
+# lowreturn1=low["報酬率-Ln"].sum()/len(low)
+high=pv.loc[high.index]
+high["加權報酬"]=high["mktcap_k"].sum()
+high["組合占比"]=high["mktcap_k"] / high["加權報酬"]
+highreturn=(high["組合占比"]*high["roi"]).sum()
+
+
+pv["加權報酬"]=pv["mktcap_k"].sum()
+pv["組合占比"]=pv["mktcap_k"] / pv["加權報酬"]
+pvreturn=(pv["市值比重％"]*pv["ln_roi"]).sum()*0.01
+# highreturn1=high["報酬率-Ln"].sum()/len(high)
+return lowreturn, highreturn ,pvreturn
+
+
+
+
+
+def famaindex(df,condition):
+
+df[df[condition]>0]
+l,m,h=splithree(df,condition)
+sh,bh=splittwo(df,l)###因為股價淨值比越低越好
+sm,bm=splittwo(df,m)###因為股價淨值比越低越好
+sl,bl=splittwo(df,h)###因為股價淨值比越低越好
+return sl,sm,sh, bl,bm,bh
+
+
+
+
+
+def famaindex1(df,Financialstatements ,condition):
+######取index 所以要使用 531 的分組名單
+
+l,m,h= fin(Financialstatements,condition)
+sh,bh=splittwo(df,l)###因為股價淨值比越低越好
+sm,bm=splittwo(df,m)###因為股價淨值比越低越好
+sl,bl=splittwo(df,h)###因為股價淨值比越低越好
+return sl,sm,sh, bl,bm,bh
+def famathreegroup(std,df):
+sl,sm,sh, bl,bm,bh= famaindex(std,"pbr")
+sl=df.loc[sl]
+sm=df.loc[sm]
+sh=df.loc[sh]
+bl=df.loc[bl]
+bm=df.loc[bm]
+bh=df.loc[bh]
+return sl ,sm, sh,bl,bm,bh
+def famathreeout(std,df):
+sl,sm,sh, bl,bm,bh=famathreegroup(std,df)
+
+sl = mean(sl).round(4) ## 小型 小condition
+sm = mean(sm).round(4) ## 小型
+sh = mean(sh).round(4) ## 小型
+
+
+
+ bl = mean(bl).round(4)
+bm = mean(bm).round(4) ## 小型
+bh = mean(bh).round(4)
+small=1/3*(sl+sm+sh)
+large=1/3*(bl+bm+bh)
+french=small-large
+return french.round(4)
+
+
+
+def famafivegroup(std,df,condition):
+sl,sm,sh, bl,bm,bh= famaindex( std , condition)
+sl=df.loc[sl]
+sm=df.loc[sm]
+sh=df.loc[sh]
+bl=df.loc[bl]
+bm=df.loc[bm]
+bh=df.loc[bh]
+return sl ,sm, sh, bl , bm , bh
+def famafivegroup1(std,invest,condition,df):
+sl,sm,sh, bl,bm,bh= famaindex1( std ,invest ,condition)
+
+
+
+ sl=df.loc[sl]
+sm=df.loc[sm]
+sh=df.loc[sh]
+bl=df.loc[bl]
+bm=df.loc[bm]
+bh=df.loc[bh]
+return sl ,sm, sh, bl , bm , bh
+
+
+
+
+
+
+# sl,sm,sh, bl,bm,bh=famaindex1(famastd,invest_now,str(year))
+
+
+
+# famafivegroup1(famastd,invest_now,str(year),df)
+#幫財報寫規則
+def fin(data,condition):
+
+data = data[data[condition]>0]
+data.sort_values(condition,ascending=True,inplace=True)
+low=data.iloc[:int(len(data)*0.3)]
+medium=data.iloc[int(len(data)*0.3):int(len(data)*0.7)]
+high=data.iloc[int(len(data)*0.7):]
+low=low.index
+medium=medium.index
+high=high.index
+return low , medium ,high
+# famafiveout(famastd,df,str(year))
+# l,m,h= fin(invest_now,str(year))
+
+
+
+def famafiveout(std,investnow,df,condition):
+nwsl,nwsm,nwsh, nwbl,nwbm,nwbh=famafivegroup(std,df,"pbr")
+pesl,pesm,pesh, pebl,pebm,pebh=famafivegroup1(std,investnow,condition ,df )
+disl,dism,dish, dibl,dibm,dibh=famafivegroup(std,df,"tej_cdiv_yid" )
+
+
+nwsl = mean(nwsl).round(4) ## 小型 小condition
+nwsm = mean(nwsm).round(4) ## 小型
+nwsh = mean(nwsh).round(4) ## 小型
+
+
+
+ nwbl = mean(nwbl).round(4)
+nwbm = mean(nwbm).round(4) ## 小型
+nwbh = mean(nwbh).round(4)
+
+pesl = mean(pesl).round(4)
+pesm = mean(pesm).round(4)
+pesh = mean(pesh).round(4)
+
+pebl = mean(pebl).round(4)
+pebm = mean(pebm).round(4)
+pebh = mean(pebh).round(4)
+
+disl = mean(disl).round(4)
+dism = mean(dism).round(4)
+dish = mean(dish).round(4)
+
+dibl = mean(dibl).round(4)
+dibm = mean(dibm).round(4)
+dibh = mean(dibh).round(4)
+
+
+small=1/9*(nwsl+nwsm+nwsh+pesl+pesm+pesh+disl+dism+dish)
+large=1/9*(nwbl+nwbm+nwbh+pebl+pebm+pebh+dibl+dibm+dibh)
+french=small-large
+return french.round(4)
+
+
+
+# famafiveout(famastd,invest_now,df,str(year))
+
+
+
+
+
+
+##### nw >> 淨值比意思
+##### per >> 益本比
+##### di >> 現金股利率
+##### 80
+
+
+
+dataframe['zdate']=pd.to_datetime(dataframe['zdate'])
+dataframe["month"]= dataframe["zdate"].dt.month
+dataframe["year"]= dataframe['zdate'].dt.year
+dataframe["day"]= dataframe['zdate'].dt.day
+dataframe.sort_values('zdate',inplace=True)
+dataframe.set_index("stk_id",inplace=True)
+
+
+
+
+
+
+famalast= dataframe.groupby(['year','month']).nth(1)
+###取得年月日
+famamonthstd = dataframe.groupby(['year','month']).nth(-1)
+famayearstd = dataframe.groupby(['year','month']).nth(-1)
+famayearstd["month"] = famayearstd["zdate"].dt.month
+famayearstd = famayearstd[famayearstd["month"]== 5 ]["zdate"]
+famayearstd=famayearstd.reset_index()
+famagroup=dataframe.groupby("zdate")
+std=famamonthstd['zdate'].reset_index()
+famagroup=list(famagroup)
+
+
+
+# df=famagroup[3][1]
+famastd=famagroup[0][1]
+###########分成大小
+# famastd["益本比"] = famastd["常續性EPS"] / famastd["市值(百萬元)"]
+##此涵式得到所有市場投組 index
+##############
+def alldata(data,condition):
+df=data[data["mkt"]==condition]
+df=df.index
+return df
+
+
+
+###########得到所有市場別投組後 再進行分組
+
+
+
+def twotimestwomean(df,sl ,sh, bl , bh ): ###小型溢酬
+sl = df.loc[sl]
+sh = df.loc[sh]
+bl = df.loc[bl]
+bh = df.loc[bh]
+sl = mean(sl) ## 小型 小condition
+sh = mean(sh) ## 小型
+bl = mean(bl)
+bh = mean(bh)
+answer=(1/2*(sh+bh)-1/2*(sl+bl))
+return answer.round(4)
+
+
+
+
+# famamonthstd =famagroup[0][1]
+# famamovestd = smomentum[0][1]
+# famamovestd1 = mmomentum[5][1]
+# famamovestd2 = lmomentum[5][1]
+# # famamove=famamove.loc[famastdindex]
+fama=[]
+famastd=famagroup[0][1]
+famastdindex = alldata(famastd,"TSE")
+famastd=famastd.loc[famastdindex]
+Fiancialyear=str(year)
+
+
+
+profit_now=profit_factor["eps"+Fiancialyear]
+profit_now=profit_now.loc[famastdindex]
+profit_now=pd.DataFrame(profit_now)
+invest_now=invest_factor['inv'+Fiancialyear]
+invest_now=invest_now.loc[famastdindex]
+invest_now=pd.DataFrame(invest_now)
+
+
+
+fama=[]
+
+
+
+for i in famagroup:
+df = i[1]# try :
+try:
+df=df.loc[famastdindex]
+except KeyError :
+famastdindex1=pd.Series( famastdindex)
+for j in famastdindex :
+if j not in df.index :
+print(j)
+famastdindex1= famastdindex1[famastdindex1 != j]
+famastdindex=famastdindex1.to_frame()
+famastdindex.set_index('stk_id',inplace=True)
+famastdindex =famastdindex.index
+df = df.loc[famastdindex]
+try:
+famastd=famastd.loc[famastdindex]
+except:
+print("失敗了")
+
+# famastdindex.drop()
+
+
+year = df["year"][0]
+
+
+
+ month =df['month'][0]
+#######################市場投組
+
+market=meanwithindex(df,alldata(famastd,"TSE"))
+
+#############財報分組 投資 稅後淨利
+
+
+
+ ##短期報酬
+
+
+
+ move0=sh_roi[sh_roi['year']==year]
+month1 = month-1
+if month1 == 0 :
+month1 = 12
+
+move0=move0[move0['month']== month1]
+try :
+move0=move0.loc[famastdindex]
+except KeyError :
+famastdindex1=pd.Series( famastdindex)
+
+
+
+ for w in famastdindex :
+if w not in move0.index :
+famastdindex1 = famastdindex1[famastdindex1 != w]
+famastdindex1=famastdindex1.to_frame()
+famastdindex1.set_index('stk_id',inplace=True)
+move = famastdindex1.index
+move0 = move0.loc[move]
+
+
+
+ ###################動能
+move1=momentum[momentum['year']==year]
+move1=move1[move1['month']==month]
+try :
+move1=move1.loc[famastdindex]
+except KeyError :
+famastdindex1=pd.Series( famastdindex)
+
+
+
+ for k in famastdindex :
+if k not in move1.index :
+
+famastdindex1 = famastdindex1[famastdindex1 != k]
+famastdindex1=famastdindex1.to_frame()
+famastdindex1.set_index('stk_id',inplace=True)
+move = famastdindex1.index
+move1 = move1.loc[move]
+###############################333
+move2=long[long['year']==year]
+move2=move2[move2['month']==month]
+try :
+move2=move2.loc[famastdindex]
+except KeyError :
+famastdindex1=pd.Series( famastdindex)
+
+
+
+ for q in famastdindex :
+if q not in move2.index :
+
+famastdindex1 = famastdindex1[famastdindex1 != q]
+famastdindex1=famastdindex1.to_frame()
+famastdindex1.set_index('stk_id',inplace=True)
+move = famastdindex1.index
+move2 = move2.loc[move]
+####大投組 小投組
+s,b=marketpro(famastd)
+
+
+
+########短期動能###動能報酬率專用 條件能為負數
+
+
+
+
+smovel,smovem,smoveh =splithree(move0, "短期反轉%",limit=False )
+meanwithindex(df,smovel)
+meanwithindex(df,smovem)
+meanwithindex(df,smoveh)
+smovesl,smovebl = splittwo(df, smovel)
+smovesm,smovebm = splittwo(df, smovem)
+smovesh,smovebh = splittwo(df, smoveh)
+sriskpremium = twotimestwomean(df, smovesl,smovesh , smovebl ,smovebh )##
+
+
+
+ smovesl,smovesm,smovesh ,smovebl ,smovebm ,smovebh =threetimestwomean(df,smovesl,smovesm, smovesl,smovebl,smovebm ,smovebh )
+### 動能投組 2個月前近一年
+mmovel,mmovem,mmoveh =splithree(move1, "2個月前年報酬率",limit=False )
+meanwithindex(df,mmovel)
+meanwithindex(df,mmovem)
+meanwithindex(df,mmoveh)
+mmovesl,mmovebl = splittwo(df, mmovel)
+mmovesm,mmovebm = splittwo(df, mmovem)
+mmovesh,mmovebh = splittwo(df, mmoveh)
+mriskpremium = twotimestwomean(df, mmovesl,mmovesh , mmovebl ,mmovebh )##
+
+
+
+ mmovesl,mmovesm,mmovesh ,mmovebl ,mmovebm ,mmovebh =threetimestwomean(df,mmovesl,mmovesm, mmovesl,mmovebl,mmovebm ,mmovebh )
+##########長期反轉投組
+lmovel,lmovem,lmoveh =splithree(move2, "13個月前近3年報酬",limit=False )
+
+meanwithindex(df,lmovel)
+meanwithindex(df,lmovem)
+meanwithindex(df,lmoveh)
+
+lmovesl,lmovebl = splittwo(df, lmovel)
+lmovesm,lmovebm = splittwo(df, lmovem)
+lmovesh,lmovebh = splittwo(df, lmoveh)
+lriskpremium = twotimestwomean(df, lmovesl,lmovesh , lmovebl ,lmovebh )##
+
+
+
+ lmovesl,lmovesm,lmovesh ,lmovebl ,lmovebm ,lmovebh =threetimestwomean(df,lmovesl,lmovesm, lmovesl,lmovebl,lmovebm ,lmovebh )
+#交易面
+####此function 獲得 1~30 ~31~70 ~71~100 個別分組報酬率
+nwl,nwm,nwh=splithree(famastd,"pbr",limit=True)
+meanwithindex(df,nwh)
+meanwithindex(df,nwm)
+meanwithindex(df,nwl)
+nwsl,nwbl = splittwo(famastd, nwl)
+nwsm,nwbm = splittwo(famastd, nwm)
+nwsh,nwbh = splittwo(famastd, nwh)
+
+
+
+ nwriskpremium = twotimestwomean(df,nwsl,nwsh , nwbl ,nwbh )##
+##1/2*(小型高淨值市價投組+大型高淨值市價投組)-1/2*(小型低淨值市價投組+大型低淨值市價投組)
+##依French的定義，由兩個高淨值市價比投組的平均報酬率減兩個低淨值市價比投組的平均報酬率，因此又稱價值型溢酬。
+nwsl,nwsm,nwsh ,nwbl ,nwbm ,nwbh =threetimestwomean(df,nwsh,nwsm, nwsl,nwbh,nwbm ,nwbl )
+
+#### 益本比所以相反
+pel,pem,peh=splithree(famastd,"tej_per2",limit=True)
+meanwithindex(df,pel)
+meanwithindex(df,pem)
+meanwithindex(df,peh)
+##################################
+pesl,pebl = splittwo(famastd, pel)###小投組 低本益比 大型 低本益比
+pesm,pebm = splittwo(famastd, pem)###小型 中 大型 中
+pesh,pebh = splittwo(famastd, peh)## 小型 高 大型 高
+# pesl1,pesh1,pebl1,pebh1 =twotimestwo(famastd,"本益比-TEJ")
+periskpremium = twotimestwomean(df,pesl ,pesh , pebl , pebh )####
+#1/2*(小型高益本比投組+大型高益本比投組) -1/2*(小型低益本比投組+大型低益本比投組)
+
+pesl , pesm , pesh, pebl ,pebm ,pebh= threetimestwomean(df,pesl,pesm, pesh, pebl , pebm ,pebh )
+##################
+
+dil,dim,dih=splithree(famastd,"tej_cdiv_yid",limit=True)
+disl,dibl = splittwo(famastd, dil)
+dism,dibm = splittwo(famastd, dim)
+dish,dibh = splittwo(famastd, dih)
+meanwithindex(df,dil)
+meanwithindex(df,dim)
+meanwithindex(df,dih)
+# disl1,dish1,dibl1,dibh1 =twotimestwo(famastd,"現金股利率")
+
+diriskpremium = twotimestwomean(df,disl ,dish, dibl , dibh )##
+
+disl,dism,dish ,dibl ,dibm ,dibh =threetimestwomean(df,disl,dism, dish,dibl,dibm ,dibh )
+
+
+
+ ###盈利能力 排除0
+
+profit_now=profit_now.loc[famastdindex]
+
+
+
+ epsl,epsm,epsh=splithree(profit_now,'eps'+str(Fiancialyear),limit=True)
+meanwithindex(df,epsl)
+meanwithindex(df,epsm)
+meanwithindex(df,epsh)
+epssl,epsbl = splittwo(famastd, epsl)
+epssm,epsbm = splittwo(famastd, epsm)
+epssh,epsbh = splittwo(famastd, epsh)
+epsriskpremium = twotimestwomean(df,epssl ,epssh, epsbl , epsbh )##
+
+epssl,epssm,epssh ,epsbl ,epsbm ,epsbh =threetimestwomean(df,epssl,epssm, epssh,epsbl,epsbm ,epsbh )
+
+###########資產成長
+## 投資0 排除
+invest_now=invest_now.loc[famastdindex]
+
+
+
+ inl,inm,inh=splithree(invest_now,'inv'+str(Fiancialyear),limit=True)
+insl,inbl = splittwo(famastd, inl)
+insm,inbm = splittwo(famastd, inm)
+insh,inbh = splittwo(famastd, inh)
+meanwithindex(df,inl)
+meanwithindex(df,inm)
+meanwithindex(df,inh)
+
+invriskpremium = twotimestwomean(df,insl ,insh, inbl , inbh )##
+insl,insm,insh ,inbl ,inbm ,inbh =threetimestwomean(df,insl,insm, insh, inbl, inbm , inbh )
+
+
+
+
+
+
+output=pd.DataFrame(columns=columns,index=range(1))
+# output["證券名稱"]
+output["年月日"]= df["zdate"][0]
+output["市場風險溢酬"]= meanwithindex(df,alldata(famastd,"TSE")) - rf["一年定存"][0]/365
+output["無風險利率"] = rf["一年定存"][0]/365
+output["規模溢酬(3因子)"] = famathreeout(famastd,df)
+output["規模溢酬(5因子)"] =famafiveout(famastd,profit_now,df,'eps'+str(Fiancialyear))
+
+
+
+ output["淨值市價比溢酬"] = nwriskpremium
+output["益本比溢酬"] = periskpremium
+output["股利殖利率溢酬"]= diriskpremium
+output["動能因子"] = mriskpremium
+output["短期反轉因子"] =sriskpremium
+output["長期反轉因子"] =lriskpremium
+output["投資因子"] = invriskpremium
+output["盈利能力因子"] = epsriskpremium
+
+
+
+
+output["市場投組"] = meanwithindex(df,alldata(famastd,"TSE"))
+output["小型投組"] = meanwithindex(df,s)
+output["大型投組"] = meanwithindex(df,b)
+output["高淨值市價投組"] = meanwithindex(df,nwl)
+output["中淨值市價投組"] = meanwithindex(df,nwm)
+output["低淨值市價投組"] = meanwithindex(df,nwh)
+output["大型高淨值市價投組"] = nwbh
+output["大型中淨值市價投組"] = nwbm
+output["大型低淨值市價投組"] = nwbl
+output["小型低淨值市價投組"] = nwsl
+output["小型中淨值市價投組"] = nwsm
+output["小型高淨值市價投組"] = nwsh
+output["高股利殖利率投組"] = meanwithindex(df,dih)
+output["中股利殖利率投組"] = meanwithindex(df,dim)
+output["低股利殖利率投組"] = meanwithindex(df,dil)
+output["大型高股利殖利率投組"] = dibh
+output["大型中股利殖利率投組"] = dibm
+output["大型低股利殖利率投組"] = dibl
+output["小型低股利殖利率投組"] = disl
+output["小型中股利殖利率投組"] = dism
+output["小型高股利殖利率投組"] = dish
+output["高益本比投組"] = meanwithindex(df,pel)
+output["中益本比投組"] = meanwithindex(df,pem)
+output["低益本比投組"] = meanwithindex(df,peh)
+output["大型高益本比投組"] = pebl
+output["大型中益本比投組"] = pebm
+output["大型低益本比投組"] = pebh
+output["小型高益本比投組"] = pesl
+output["小型中益本比投組"] = pesm
+output["小型低益本比投組"] = pesh
+output["高短期反轉投組"] = meanwithindex(df,smoveh)
+output["中短期反轉投組"] = meanwithindex(df,smovem)
+output["低短期反轉投組"] = meanwithindex(df,smovel)
+output["大型高短期反轉投組"] = smovebh
+output["大型中短期反轉投組"] = smovebm
+output["大型低短期反轉投組"] = smovebl
+output["小型高短期反轉投組"] = smovesh
+output["小型中短期反轉投組"] = smovesm
+output["小型低短期反轉投組"] = smovesl
+output["大型高短期反轉投組"] = smovebh
+
+
+
+ output["高動能投組"] = meanwithindex(df,mmoveh)
+output["中動能投組"] = meanwithindex(df,mmovem)
+output["低動能投組"] = meanwithindex(df,mmovel)
+output["大型中動能投組"] = mmovebm
+output["大型低動能投組"] = mmovebl
+output["大型高動能投組"] = mmovebh
+
+
+
+ output["小型高動能投組"] = mmovesh
+output["小型中動能投組"] = mmovesm
+output["小型低動能投組"] = mmovesl
+
+
+output["高長期反轉投組"] = meanwithindex(df,lmoveh)
+output["中長期反轉投組"] = meanwithindex(df,lmovem)
+output["低長期反轉投組"] = meanwithindex(df,lmovel)
+output["大型高長期反轉投組"] = lmovebh
+output["大型中長期反轉投組"] = lmovebm
+output["大型低長期反轉投組"] = lmovebl
+output["小型高長期反轉投組"] = lmovesh
+output["小型中長期反轉投組"] = lmovesm
+output["小型低長期反轉投組"] = lmovesl
+output["大型高長期反轉投組"] = lmovebh
+
+output["高投資投組"] = meanwithindex(df,inl)
+output["中投資投組"] = meanwithindex(df,inm)
+output["低投資投組"] = meanwithindex(df,inh)
+
+
+
+
+output["大型高投資投組"] = inbh
+output["大型中投資投組"] = inbm
+output["大型低投資投組"] = inbl
+output["小型低投資投組"] = insl
+output["小型中投資投組"] = insm
+output["小型高投資投組"] = insh
+
+output["高盈利能力投組"] = meanwithindex(df,epsl)
+output["中盈利能力投組"] = meanwithindex(df,epsm)
+output["低盈利能力投組"] = meanwithindex(df,epsh)
+
+
+
+
+output["大型高盈利能力投組"] = epsbh
+output["大型中盈利能力投組"] = epsbm
+output["大型低盈利能力投組"] = epsbl
+output["小型低盈利能力投組"] = epssl
+output["小型中盈利能力投組"] = epssm
+output["小型高盈利能力投組"] = epssh
+
+
+
+
+
+
+
+ fama.append(output)
+
+
+
+ #######要把刪掉的樣本加回來
+if df["zdate"][0] == famayearstd[ famayearstd['year']==year]['zdate'].values:
+famastd = df
+famastdindex = alldata(famastd,"TSE")
+famastd=famastd.loc[famastdindex]
+Financialyear = str(year)
+
+
+
+ profit_now=profit_factor["eps"+Financialyear]
+profit_now=profit_now.loc[famastdindex]
+profit_now=pd.DataFrame(profit_now)
+invest_now=invest_factor['inv'+Financialyear]
+invest_now=invest_now.loc[famastdindex]
+invest_now=pd.DataFrame(invest_now)
+# if df["zdate"][0] == std[(std['year']==year) &(std['month']==month) ]["zdate"].values:
+# famamovestd = df
+# # except KeyError:
+# # pass
+
+
+
