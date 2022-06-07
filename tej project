@@ -1,0 +1,177 @@
+ fama1=[]
+    for group in groups:
+        df=famagroup[1][1]
+        if group in ('Y8888','Y8888L'):
+            famastdindex = alldata(famastd,"TSE",'上市')
+            # famastd= famastd.loc[famastdindex]
+            try:        
+                df=dfinput.loc[famastdindex]
+            except KeyError :
+                famastdindex1=pd.Series( famastdindex)
+                for j  in  famastdindex :
+                    if j  not in  df.index  :
+                        famastdindex1= famastdindex1[famastdindex1 != j]
+                famastdindex=famastdindex1.to_frame()
+                famastdindex.set_index('stk_id',inplace=True)
+                famastdindex =famastdindex.index 
+                df = df.loc[famastdindex]
+            try :
+                y8888=non_fin(df)
+            except KeyError:
+                y8888=df.index
+                for w  in  M2800   :
+                    if w  in y8888 :
+                        y8888 = y8888[y8888 != w]
+                profit_now=profit_factor["eps"+Fiancialyear]
+                invest_now=invest_factor['inv'+Fiancialyear]
+                try : 
+                    profit_now=profit_now.loc[y8888]
+                except KeyError:
+                    y88881=pd.Series(y8888)
+                    for j  in  y8888 :
+                        if j  not in  profit_now.index  :
+                            y88881=  y88881[y88881 != j]
+                    profit_now=profit_now.loc[y88881]
+                profit_now=pd.DataFrame(profit_now)
+                try : 
+                    invest_now=invest_now.loc[y8888]
+                except KeyError:
+                    y88881=pd.Series(y8888)
+                    for j  in  y8888 :
+                        if j  not in  profit_now.index  :
+                            y88881=  y88881[y88881 != j]
+                    invest_now=invest_now.loc[y88881]
+                invest_now=pd.DataFrame(invest_now) 
+            if  group == 'Y8888':
+                Y8888 = calculate1(df,y8888,famastd,year,month,"不連續",invest_now,profit_now,group,cal=None)
+            if  group =='Y8888L':
+                Y8888L = calculate1(df,y8888,famastd,year,month,"連續",invest_now,profit_now,group,"cal")
+        if group in ('Y9999','Y9999L')  :  
+            famastdindex = alldata(famastd,"TSE",'上市')
+            try:        
+                df=df.loc[famastdindex]
+            except KeyError :
+                famastdindex1=pd.Series(famastdindex)
+                for j  in  famastdindex :
+                    if j  not in  df.index  :
+                        famastdindex1= famastdindex1[famastdindex1 != j]
+                famastdindex=famastdindex1.to_frame()
+                famastdindex.set_index('stk_id',inplace=True)
+                famastdindex=famastdindex.index
+                df = df.loc[famastdindex]
+         
+                ########需要考慮財報延期! 
+                
+                profit_now=profit_factor["eps"+Fiancialyear]
+                invest_now=invest_factor['inv'+Fiancialyear]
+                try : 
+                    profit_now=profit_now.loc[famastdindex]
+                except KeyError:
+                    famastdindex1=pd.Series(famastdindex)
+                    for j  in  famastdindex :
+                        if j  not in  profit_now.index  :
+                            famastdindex1=  famastdindex1[famastdindex1 != j]
+                    profit_now=profit_now.loc[famastdindex1]
+                profit_now=pd.DataFrame(profit_now)
+                try : 
+                    invest_now=invest_now.loc[famastdindex]
+                except KeyError:
+                    famastdindex1=pd.Series(y8888)
+                    for j  in  famastdindex :
+                        if j  not in  profit_now.index  :
+                            famastdindex1=  famastdindex1[famastdindex1 != j]
+                    invest_now=invest_now.loc[famastdindex1]
+               
+                profit_now=pd.DataFrame(profit_now)
+                invest_now=pd.DataFrame(invest_now)
+            if  group == 'Y9999':
+                Y9999= calculate1(df,famastdindex,famastd,year,month,"不連續",invest_now,profit_now,group,cal=None)
+            if  group == 'Y9999L':
+                Y9999L= calculate1(df,famastdindex,famastd,year,month,"連續",invest_now,profit_now,group,cal=None)
+
+        if group in ('Z8888','Z8888L'):
+            famastdindex = alldata(famastd,["TSE","OTC"],'上市上櫃')
+            try:        
+                df=df.loc[famastdindex]
+            except KeyError :
+                famastdindex1=pd.Series( famastdindex)
+                for j  in  famastdindex :
+                    if j  not in  df.index :
+                        famastdindex1= famastdindex1[famastdindex1 != j]
+                famastdindex1=famastdindex1.to_frame()
+                famastdindex1.set_index('stk_id',inplace=True)
+                famastdindex =famastdindex1.index 
+                df = df.loc[famastdindex]
+            try :
+                z8888=non_fin(df)
+            except KeyError:
+                z8888=df.index
+                for w  in  M2800   :
+                    if w  in z8888 :
+                        z8888 = z8888[z8888 != w]
+                profit_now=profit_factor["eps"+Fiancialyear]
+                invest_now=invest_factor['inv'+Fiancialyear]
+                try : 
+                    profit_now=profit_now.loc[z8888]
+                except KeyError:
+                    famastdindex1=pd.Series(z8888)
+                    for j  in  famastdindex :
+                        if j  not in  profit_now.index  :
+                            famastdindex1=  famastdindex1[famastdindex1 != j]
+                    profit_now=profit_now.loc[famastdindex1]
+                profit_now=pd.DataFrame(profit_now)
+                try : 
+                    invest_now=invest_now.loc[z8888]
+                except KeyError:
+                    famastdindex1=pd.Series(z8888)
+                    for j  in  famastdindex :
+                        if j  not in  profit_now.index  :
+                            famastdindex1=  famastdindex1[famastdindex1 != j]
+                    invest_now=invest_now.loc[famastdindex1]
+                profit_now=pd.DataFrame(profit_now)
+                invest_now=pd.DataFrame(invest_now) 
+            if  group == 'Z8888':
+                Z8888 = calculate1(df,z8888,famastd,year,month,"不連續",invest_now,profit_now,group,cal=None)
+            if  group =='Z8888L':
+                Z8888L = calculate1(df,z8888,famastd,year,month,"連續",invest_now,profit_now,group,cal=None)
+
+        if group in ('Z9999','Z9999L')  :  
+            famastdindex = alldata(famastd,["TSE","OTC"],'上市上櫃')
+            try:        
+                df=df.loc[famastdindex]
+            except KeyError :
+                famastdindex1=pd.Series(famastdindex)
+                for j  in  famastdindex :
+                    if j  not in  df.index  :
+                        famastdindex1= famastdindex1[famastdindex1 != j]
+                famastdindex=famastdindex1.to_frame()
+                famastdindex.set_index('stk_id',inplace=True)
+                famastdindex = famastdindex.index
+                df = df.loc[ famastdindex]
+                profit_now=profit_factor["eps"+Fiancialyear]
+                invest_now=invest_factor['inv'+Fiancialyear]
+                try : 
+                    profit_now=profit_now.loc[famastdindex]
+                except KeyError:
+                    famastdindex1=pd.Series(famastdindex)
+                    for j  in  famastdindex :
+                        if j  not in  profit_now.index  :
+                            famastdindex1=  famastdindex1[famastdindex1 != j]
+                    profit_now=profit_now.loc[famastdindex1]
+                profit_now=pd.DataFrame(profit_now)
+                try : 
+                    invest_now=invest_now.loc[famastdindex]
+                except KeyError:
+                    famastdindex1=pd.Series(y9999)
+                    for j  in  famastdindex :
+                        if j  not in  profit_now.index  :
+                            famastdindex1=  famastdindex1[famastdindex1 != j]
+                    invest_now=invest_now.loc[famastdindex1]
+                profit_now=pd.DataFrame(profit_now)
+                invest_now=pd.DataFrame(invest_now) 
+            if  group == 'Z9999':
+                Z9999= calculate1(df,famastdindex,famastd,year,month,"不連續",invest_now,profit_now,group,None)
+            if  group == 'Z9999L':
+                Z9999L= calculate1(df,famastdindex,famastd,year,month,"連續",invest_now,profit_now,group,None)
+    out= pd.concat([Y8888,Y8888L,Y9999,Y9999L,Z8888,Z8888L,Z9999,Z9999L],axis=0)
+    fama1.append(out)
